@@ -252,17 +252,21 @@ class GMFSS_UNION:
     @torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu")
     def inference_ts_drba(self, I0, I1, I2, ts, reuse=None, linear=False):
         if reuse is None:
-            # GMFlow's CNN backbone is frame-local. Extract all three frame
-            # pyramids together so the shared center frame is processed only once.
-            with torch.profiler.record_function("GMFSS/GMFlowTripletBackbone"):
+            # Both networks are frame-local. Batch the three unique frames once
+            # and reuse the center-frame pyramids for both adjacent GMFlow pairs.
+            with torch.profiler.record_function("GMFSS/TripletFeatureExtraction"):
+                frame_features = self.model.extract_frame_features(I1, I0, I2)
                 gmflow_features = self.model.extract_gmflow_features(
                     I1, I0, I2, scale=self.scale
                 )
             reuseI1I0 = self.model.reuse(
-                I1, I0, self.scale, gmflow_features=(gmflow_features[0], gmflow_features[1])
+                I1, I0, self.scale,
+                feat_ext0=frame_features[0], feat_ext1=frame_features[1],
+                gmflow_features=(gmflow_features[0], gmflow_features[1]),
             )
             reuseI1I2 = self.model.reuse(
-                I1, I2, self.scale, feat_ext0=reuseI1I0[4],
+                I1, I2, self.scale,
+                feat_ext0=frame_features[0], feat_ext1=frame_features[2],
                 gmflow_features=(gmflow_features[0], gmflow_features[2]),
             )
         else:
