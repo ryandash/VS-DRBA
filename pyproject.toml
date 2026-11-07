@@ -37,3 +37,6 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/routineLife1/VS-DRBA"
 Issues = "https://github.com/routineLife1/VS-DRBA/issues"
+
+[tool.hatch.build.targets.wheel.force-include]
+"weights/train_log_gmfss_union" = "vsdrba/gmfss_union/weights/train_log_gmfss_union"
