@@ -105,6 +105,36 @@ class GMFSS_UNION:
                 "transformer, matching, attention, and upsampling remain eager."
             )
 
+        # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
+        # 4 feature channels (the 4.26 Heavy encoder emits 16), so its weights
+        # are architecturally incompatible with the old GMFSS heavy checkpoint.
+        if rife_weights is None:
+            raise ValueError(
+                "A RIFE 4.25 checkpoint path is required. Download it with "
+                "python -m vsdrba and pass the path to flownet_v4.25.pkl."
+            )
+        rife_state = load_state_dict(rife_weights)
+        load_result = self.ifnet.load_state_dict(rife_state, strict=False)
+        if load_result.missing_keys:
+            raise RuntimeError(
+                "Missing required RIFE 4.25 checkpoint parameters: "
+                + ", ".join(load_result.missing_keys)
+            )
+        unexpected_other = [
+            key for key in load_result.unexpected_keys
+            if not key.startswith(("teacher.", "caltime."))
+        ]
+        if unexpected_other:
+            raise RuntimeError(
+                "Unexpected RIFE 4.25 checkpoint parameters: "
+                + ", ".join(unexpected_other)
+            )
+        if load_result.unexpected_keys:
+            print(
+                "RIFE checkpoint loaded; ignored "
+                f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters."
+            )
+
         self.rife_trt = bool(rife_trt)
         if self.rife_trt:
             if not self.trt and not self.gmflow_trt:
@@ -141,36 +171,6 @@ class GMFSS_UNION:
             print(
                 "Experimental RIFE TensorRT enabled for the encoder and IFBlocks; "
                 "engines will build lazily for the fixed pyramid shapes."
-            )
-
-        # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
-        # 4 feature channels (the 4.26 Heavy encoder emits 16), so its weights
-        # are architecturally incompatible with the old GMFSS heavy checkpoint.
-        if rife_weights is None:
-            raise ValueError(
-                "A RIFE 4.25 checkpoint path is required. Download it with "
-                "python -m vsdrba and pass the path to flownet_v4.25.pkl."
-            )
-        rife_state = load_state_dict(rife_weights)
-        load_result = self.ifnet.load_state_dict(rife_state, strict=False)
-        if load_result.missing_keys:
-            raise RuntimeError(
-                "Missing required RIFE 4.25 checkpoint parameters: "
-                + ", ".join(load_result.missing_keys)
-            )
-        unexpected_other = [
-            key for key in load_result.unexpected_keys
-            if not key.startswith(("teacher.", "caltime."))
-        ]
-        if unexpected_other:
-            raise RuntimeError(
-                "Unexpected RIFE 4.25 checkpoint parameters: "
-                + ", ".join(unexpected_other)
-            )
-        if load_result.unexpected_keys:
-            print(
-                "RIFE checkpoint loaded; ignored "
-                f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters."
             )
 
         self.scale = scale
