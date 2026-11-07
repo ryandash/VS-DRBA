@@ -18,6 +18,7 @@ class GMFSS_UNION:
         scale=1.0,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         trt=False,
+        gmflow_trt=False,
         rife_weights=None,
     ):
         self.model = Model()
@@ -60,6 +61,48 @@ class GMFSS_UNION:
             print(
                 "GMFSS TensorRT enabled for FeatureNet and FusionNet; "
                 "engines will build lazily for the first input shape."
+            )
+
+        self.gmflow_trt = bool(gmflow_trt)
+        if self.gmflow_trt:
+            if not self.trt:
+                try:
+                    import torch_tensorrt  # noqa: F401
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "GMFlow TensorRT was requested, but torch_tensorrt could not be imported."
+                    ) from exc
+
+            # GMFlow has several distinct compute regions. Compile the CNN,
+            # transformer stack, flow-propagation attention, and convex
+            # upsampler independently so unsupported matching/grid-sampling
+            # operations remain on the eager PyTorch path.
+            gmflow_options = {
+                "enabled_precisions": {torch.float16, torch.float32},
+                "optimization_level": 3,
+                "min_block_size": 3,
+                "pass_through_build_failures": True,
+            }
+            gmflow = self.model.flownet
+            gmflow.backbone = torch.compile(
+                gmflow.backbone, backend="tensorrt", dynamic=False,
+                options=gmflow_options,
+            )
+            gmflow.transformer = torch.compile(
+                gmflow.transformer, backend="tensorrt", dynamic=False,
+                options=gmflow_options,
+            )
+            gmflow.feature_flow_attn = torch.compile(
+                gmflow.feature_flow_attn, backend="tensorrt", dynamic=False,
+                options=gmflow_options,
+            )
+            gmflow.upsampler = torch.compile(
+                gmflow.upsampler, backend="tensorrt", dynamic=False,
+                options=gmflow_options,
+            )
+            print(
+                "Experimental GMFlow TensorRT enabled for backbone, transformer, "
+                "flow attention, and upsampler; matching and warping remain eager."
             )
 
         # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
