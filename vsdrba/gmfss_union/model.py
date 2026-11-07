@@ -1,6 +1,7 @@
 """GMFSS Union tensor inference and RIFE auxiliary adapter."""
 
 import os
+import warnings
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +28,21 @@ class GMFSS_UNION:
         self.model.device(device)
         self.model.eval()
         self.ifnet = IFNet(scale=scale).to(device).eval()
+
+        # TensorRT remains optional for the original eager PyTorch path.
+        # If the active VapourSynth interpreter cannot import the backend, run
+        # all requested components eagerly rather than failing clip evaluation.
+        if trt or gmflow_trt or rife_trt:
+            try:
+                import tensorrt  # noqa: F401
+                import torch_tensorrt  # noqa: F401
+            except (ImportError, OSError) as exc:
+                warnings.warn(
+                    f"GMFSS Union: TensorRT is unavailable ({exc}); disabling TensorRT acceleration and using eager PyTorch.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                trt = gmflow_trt = rife_trt = False
 
         self.trt = bool(trt)
         if self.trt:
