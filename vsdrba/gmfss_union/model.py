@@ -36,7 +36,7 @@ class GMFSS_UNION:
             try:
                 import tensorrt  # noqa: F401
                 import torch_tensorrt  # noqa: F401
-            except (ImportError, OSError) as exc:
+            except Exception as exc:
                 warnings.warn(
                     f"GMFSS Union: TensorRT is unavailable ({exc}); disabling TensorRT acceleration and using eager PyTorch.",
                     RuntimeWarning,
