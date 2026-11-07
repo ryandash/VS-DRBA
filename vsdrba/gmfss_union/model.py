@@ -111,7 +111,7 @@ class GMFSS_UNION:
             self.model.fusionnet = _StrictTensorRTRTXModule(
                 self.model.fusionnet, "FusionNet"
             )
-            self.model.metricnet.forward_conv = _StrictTensorRTRTXModule(
+            self.model.metricnet.forward_conv_rtx = _StrictTensorRTRTXModule(
                 _MetricConvHead(self.model.metricnet), "MetricNet convolution head"
             )
             self.model.flownet.backbone = _StrictTensorRTRTXModule(
