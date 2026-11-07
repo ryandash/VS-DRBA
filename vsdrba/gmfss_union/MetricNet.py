@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.gmflow.geometry import forward_backward_consistency_check
+from .gmflow.geometry import forward_backward_consistency_check
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 backwarp_tenGrid = {}
