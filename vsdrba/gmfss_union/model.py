@@ -44,6 +44,26 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
         return self.compiled(*inputs)
 
 
+class _MetricConvHead(torch.nn.Module):
+    """Module adapter for MetricNet's convolution-only head."""
+
+    def __init__(self, metricnet):
+        super().__init__()
+        self.metric_in = metricnet.metric_in
+        self.metric_net1 = metricnet.metric_net1
+        self.metric_net2 = metricnet.metric_net2
+        self.metric_net3 = metricnet.metric_net3
+        self.metric_out = metricnet.metric_out
+
+    def forward(self, feat):
+        feat = self.metric_in(feat)
+        feat = self.metric_net1(feat) + feat
+        feat = self.metric_net2(feat) + feat
+        feat = self.metric_net3(feat) + feat
+        metric = self.metric_out(feat) * 10
+        return metric[:, :1], metric[:, 1:2]
+
+
 class GMFSS_UNION:
     def __init__(
         self,
@@ -92,7 +112,7 @@ class GMFSS_UNION:
                 self.model.fusionnet, "FusionNet"
             )
             self.model.metricnet.forward_conv = _StrictTensorRTRTXModule(
-                self.model.metricnet.forward_conv, "MetricNet convolution head"
+                _MetricConvHead(self.model.metricnet), "MetricNet convolution head"
             )
             self.model.flownet.backbone = _StrictTensorRTRTXModule(
                 self.model.flownet.backbone, "GMFlow CNN backbone"
