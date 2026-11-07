@@ -48,11 +48,11 @@ class Model:
             state_dict = load_state_dict(f"{path}/{filename}")
             network.load_state_dict(state_dict, strict=True)
 
-    def reuse(self, img0, img1, scale):
-        feat11, feat12, feat13 = self.feat_ext(img0)
-        feat21, feat22, feat23 = self.feat_ext(img1)
-        feat_ext0 = [feat11, feat12, feat13]
-        feat_ext1 = [feat21, feat22, feat23]
+    def reuse(self, img0, img1, scale, feat_ext0=None):
+        # Adjacent pairs can share the already-computed features for img0.
+        if feat_ext0 is None:
+            feat_ext0 = list(self.feat_ext(img0))
+        feat_ext1 = list(self.feat_ext(img1))
 
         img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
@@ -63,8 +63,10 @@ class Model:
         else:
             imgf0, imgf1 = img0, img1
 
-        flow01 = self.flownet(imgf0, imgf1)
-        flow10 = self.flownet(imgf1, imgf0)
+        # GMFlow returns [forward batch, backward batch] when bidirectional
+        # prediction is enabled, sharing the backbone and transformer pass.
+        flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
+        flow01, flow10 = flow_bidir.chunk(2, dim=0)
         if scale != 1.0:
             flow01 = F.interpolate(flow01, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) / scale
             flow10 = F.interpolate(flow10, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) / scale

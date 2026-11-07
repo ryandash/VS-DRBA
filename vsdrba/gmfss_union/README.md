@@ -15,22 +15,23 @@ clip = drba_gmfss(
     sc=True,
     trt=False,
     gmflow_trt=False,
+    rife_trt=False,
 )
 ```
 
-Set `trt=True` to enable the experimental TensorRT path for FeatureNet and FusionNet. On the experimental `feature/gmflow-tensorrt` branch, also set `gmflow_trt=True` to compile GMFlow's CNN feature backbone. Their engines compile lazily on the first interpolated frame and are specialized to the padded clip dimensions. The first frame can therefore take substantially longer while engines are built. GMFlow's transformer, matching, flow attention, and upsampler, plus grid sampling, MetricNet, auxiliary RIFE, DRM, and SoftSplat remain on eager PyTorch/CUDA. The initial implementation allows FP16 and FP32 TensorRT precisions; it does not promise that every operation in either network becomes a TensorRT engine. Keep `trt=False` as the baseline and fallback.
+Set `trt=True` to enable TensorRT for FeatureNet, MetricNet, and FusionNet. On `feature/gmflow-tensorrt`, `gmflow_trt=True` additionally targets GMFlow's CNN backbone, while `rife_trt=True` targets the RIFE 4.25 encoder and IFBlocks. The switches are independent. Engines compile lazily on first use and specialize to fixed padded/pyramid dimensions, so startup can be substantially slower. Torch-TensorRT partitions supported regions; GMFlow transformer attention, unsupported operators, DRM, SoftSplat, and VapourSynth orchestration remain eager. FP16 and FP32 are permitted, but this does not guarantee every layer runs in TensorRT. Keep all flags disabled for the eager baseline.
 
 The input must be a constant-format RGBH or RGBS VapourSynth clip, contain at least two frames, and have CUDA available. The default checkpoint directory is `vsdrba/gmfss_union/weights/train_log_gmfss_union`; pass `weights=...` to override it. `factor_num/factor_den` controls the output frame-rate multiplier. Alternatively, specify both `fps_num` and `fps_den` to request an absolute output frame rate.
 
 `sc=True` uses existing `_SceneChangeNext` frame properties. Supply `sc_threshold` to run VapourSynth's `misc.SCDetect` first. `linear=True` selects the linear DRM variant.
 
-TensorRT is opt-in. On this branch, `gmflow_trt=True` targets only GMFlow's convolutional backbone. The transformer is intentionally left eager because Torch-TensorRT export currently fails on its partitioned-attention reshape/stride pattern. `trt=False` retains the original eager PyTorch/CUDA execution path. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
+TensorRT is opt-in. On this branch, `trt=True` targets FeatureNet, MetricNet, and FusionNet; `gmflow_trt=True` targets GMFlow's CNN backbone; and `rife_trt=True` targets the RIFE 4.25 encoder and IFBlocks. GMFlow's transformer remains eager because Torch-TensorRT export currently fails on its partitioned-attention reshape/stride pattern. MetricNet and RIFE may still contain eager fallback regions. With all flags disabled, the original eager PyTorch/CUDA path is retained. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
 
 ## Inference graph
 
 1. Three consecutive RGB frames are prepared and padded.
-2. GMFlow estimates half-resolution motion from the center frame to its neighbors.
-3. FeatureNet extracts multiscale features; MetricNet estimates per-direction metric maps.
+2. GMFlow estimates forward/backward half-resolution motion in one bidirectional pass for each center-to-neighbor pair.
+3. FeatureNet extracts multiscale features once per frame; the center-frame features are reused across both neighboring pairs. MetricNet estimates per-direction metric maps.
 4. GMFSS DRM forms spatial timestep maps.
 5. SoftSplat performs CUDA/PyTorch warping and hole handling.
 6. RIFE 4.25 supplies the auxiliary intermediate prediction.
@@ -52,7 +53,10 @@ The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.25,
 - [ ] Validate 1080p and 4K performance, VRAM, and frame scheduling.
 - [ ] Compare TensorRT FeatureNet/FusionNet outputs against eager outputs on real 1080p and 4K clips.
 - [ ] Measure steady-state throughput and peak VRAM with TensorRT enabled versus eager execution.
-- [ ] Expand TensorRT coverage to MetricNet, GMFlow, and auxiliary RIFE only after component-level parity tests.
+- [ ] Validate MetricNet TensorRT partitions against eager MetricNet.
+- [ ] Validate bidirectional GMFlow flow ordering and parity against two eager directional passes.
+- [ ] Validate RIFE encoder/IFBlock TensorRT outputs against eager RIFE 4.25.
+- [ ] Benchmark each TensorRT flag combination independently; compilation overhead and fallback partitions may erase expected gains.
 
 ### TensorRT expansion strategy
 

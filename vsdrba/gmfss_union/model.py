@@ -19,6 +19,7 @@ class GMFSS_UNION:
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         trt=False,
         gmflow_trt=False,
+        rife_trt=False,
         rife_weights=None,
     ):
         self.model = Model()
@@ -58,8 +59,17 @@ class GMFSS_UNION:
                 dynamic=False,
                 options=trt_options,
             )
+            # MetricNet mixes convolutions with grid_sample and consistency
+            # operations. Torch-TensorRT can partition supported regions and
+            # leave unsupported tensor operations in eager PyTorch.
+            self.model.metricnet = torch.compile(
+                self.model.metricnet,
+                backend="tensorrt",
+                dynamic=False,
+                options=trt_options,
+            )
             print(
-                "GMFSS TensorRT enabled for FeatureNet and FusionNet; "
+                "GMFSS TensorRT enabled for FeatureNet, MetricNet, and FusionNet; "
                 "engines will build lazily for the first input shape."
             )
 
@@ -94,6 +104,44 @@ class GMFSS_UNION:
             print(
                 "Experimental GMFlow TensorRT enabled for the CNN backbone only; "
                 "transformer, matching, attention, and upsampling remain eager."
+            )
+
+        self.rife_trt = bool(rife_trt)
+        if self.rife_trt:
+            if not self.trt and not self.gmflow_trt:
+                try:
+                    import torch_tensorrt  # noqa: F401
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "RIFE TensorRT was requested, but torch_tensorrt could not be imported."
+                    ) from exc
+
+            # Compile the convolution-dominant RIFE encoder and IFBlocks as
+            # separate fixed-shape modules. Warping and pyramid orchestration
+            # remain in eager PyTorch.
+            rife_options = {
+                "enabled_precisions": {torch.float16, torch.float32},
+                "optimization_level": 3,
+                "min_block_size": 3,
+                "pass_through_build_failures": True,
+            }
+            self.ifnet.encode = torch.compile(
+                self.ifnet.encode, backend="tensorrt", dynamic=False,
+                options=rife_options,
+            )
+            for name in ("block0", "block1", "block2", "block3", "block4"):
+                block = getattr(self.ifnet, name, None)
+                if block is not None:
+                    setattr(
+                        self.ifnet, name,
+                        torch.compile(
+                            block, backend="tensorrt", dynamic=False,
+                            options=rife_options,
+                        ),
+                    )
+            print(
+                "Experimental RIFE TensorRT enabled for the encoder and IFBlocks; "
+                "engines will build lazily for the fixed pyramid shapes."
             )
 
         # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
@@ -183,7 +231,9 @@ class GMFSS_UNION:
     @torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu")
     def inference_ts_drba(self, I0, I1, I2, ts, reuse=None, linear=False):
         reuseI1I0 = self.model.reuse(I1, I0, self.scale) if reuse is None else reuse
-        reuseI1I2 = self.model.reuse(I1, I2, self.scale)
+        reuseI1I2 = self.model.reuse(
+            I1, I2, self.scale, feat_ext0=reuseI1I0[4]
+        )
 
         flow10, metric10 = reuseI1I0[0], reuseI1I0[2]
         flow12, metric12 = reuseI1I2[0], reuseI1I2[2]
