@@ -96,7 +96,7 @@ def drba_rife(
     :param sc:                      Avoid interpolating frames over scene changes.
     :param sc_threshold:            Threshold for scene change detection. Must be between 0.0 and 1.0.
                                     Leave the argument as None if the frames already have _SceneChangeNext property set.
-    :param trt:                     Use TensorRT for high-performance inference.
+    :param trt:                     Use TensorRT-RTX for high-performance inference.
                                     Not supported in '4.0' and '4.1' models.
     :param trt_static_shape:        Build with static or dynamic shapes.
     :param trt_min_shape:           Min size of dynamic shapes. Ignored if trt_static_shape=True.
@@ -111,9 +111,8 @@ def drba_rife(
     :param trt_optimization_level:  Builder optimization level. Higher level allows TensorRT to spend more building time
                                     for more optimization options. Valid values include integers from 0 to the maximum
                                     optimization level, which is currently 5. (default is 3)
-    :param trt_cache_dir:           Directory for TensorRT engine file. Engine will be cached when it's built for the
-                                    first time. Note each engine is created for specific settings such as model
-                                    path/name, precision, workspace etc, and specific GPUs and it's not portable.
+    :param trt_cache_dir:           Directory for TensorRT-RTX runtime JIT caches. Cached kernels are reused on
+                                    subsequent runs when the model, input shape, precision, GPU, and runtime match.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("rife: this is not a clip")
@@ -149,7 +148,7 @@ def drba_rife(
         raise vs.Error("rife: scale must be 0.25, 0.5, 1.0, 2.0, or 4.0")
 
     if not trt_static_shape:
-        raise vs.Error("rife: dynamic shapes is not allowed at the moment due to issues in Torch-TensorRT")
+        raise vs.Error("rife: dynamic shapes is not allowed at the moment due to issues in TensorRT-RTX")
 
         if not isinstance(trt_min_shape, list) or len(trt_min_shape) != 2:
             raise vs.Error("rife: trt_min_shape must be a list with 2 items")
@@ -229,10 +228,18 @@ def drba_rife(
     if sc and sc_threshold is not None:
         clip = sc_detect(clip, sc_threshold)
 
+    # TensorRT-RTX is the only supported compiled backend. Import or
+    # compilation failures are fatal; never silently fall back to eager mode.
     if trt:
-        import tensorrt
-        import torch_tensorrt
+        try:
+            import tensorrt_rtx as tensorrt
+            import torch_tensorrt
+        except Exception as exc:
+            raise vs.Error(
+                f"rife: TensorRT-RTX is unavailable or failed to import: {exc}"
+            ) from exc
 
+    if trt:
         if trt_static_shape:
             dimensions = f"{pw}x{ph}"
         else:
@@ -247,186 +254,169 @@ def drba_rife(
                 f"_max-{trt_max_shape[0]}x{trt_max_shape[1]}"
             )
 
-        flownet_engine_path = os.path.join(
-            os.path.realpath(trt_cache_dir),
-            (
-                    f"DRBA_{model_name}"
-                    + f"_{dimensions}"
-                    + f"_{'fp16' if fp16 else 'fp32'}"
-                    + f"_scale-{scale}"
-                    + f"_ensemble-{ensemble}"
-                    + f"_{torch.cuda.get_device_name(device)}"
-                    + f"_trt-{tensorrt.__version__}"
-                    + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
-                    + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
-                    + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ts"
-            ),
+        cache_dir = os.path.realpath(trt_cache_dir)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        checkpoint_stat = os.stat(os.path.join(model_dir, model_name))
+        cache_name = (
+            f"DRBA_{model_name}"
+            + f"_weights-{checkpoint_stat.st_size}-{checkpoint_stat.st_mtime_ns}"
+            + f"_{dimensions}"
+            + f"_{'fp16' if fp16 else 'fp32'}"
+            + f"_scale-{scale}"
+            + f"_ensemble-{ensemble}"
+            + f"_{torch.cuda.get_device_name(device)}"
+            + f"_trt-{tensorrt.__version__}"
+            + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
+            + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
+            + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
+        )
+        flownet_runtime_cache = os.path.join(cache_dir, cache_name + ".flownet.runtime_cache")
+        block0_runtime_cache = os.path.join(cache_dir, cache_name + ".block0.runtime_cache")
+        encode_runtime_cache = os.path.join(cache_dir, cache_name + ".encode.runtime_cache")
+
+        from torch_tensorrt.dynamo.conversion.impl.grid import GridSamplerInterpolationMode
+
+        GridSamplerInterpolationMode.update(
+            {
+                0: tensorrt.InterpolationMode.LINEAR,
+                1: tensorrt.InterpolationMode.NEAREST,
+                2: tensorrt.InterpolationMode.CUBIC,
+            }
         )
 
-        block0_engine_path = os.path.join(
-            os.path.realpath(trt_cache_dir),
-            (
-                    f"DRBA_{model_name}"
-                    + f"_{dimensions}"
-                    + f"_{'fp16' if fp16 else 'fp32'}"
-                    + f"_scale-{scale}"
-                    + f"_ensemble-{ensemble}"
-                    + f"_{torch.cuda.get_device_name(device)}"
-                    + f"_trt-{tensorrt.__version__}"
-                    + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
-                    + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
-                    + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ts0"
-            ),
-        )
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, "w")
 
-        encode_engine_path = flownet_engine_path + ".encode"
+        flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
-        if not os.path.isfile(flownet_engine_path) or (Head is not None and not os.path.isfile(encode_engine_path)):
-            from torch_tensorrt.dynamo.conversion.impl.grid import GridSamplerInterpolationMode
+        if trt_static_shape:
+            if encode is not None:
+                flownet_inputs = (
+                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                    torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
+                    torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
+                    torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
+                )
 
-            GridSamplerInterpolationMode.update(
-                {
-                    0: tensorrt.InterpolationMode.LINEAR,
-                    1: tensorrt.InterpolationMode.NEAREST,
-                    2: tensorrt.InterpolationMode.CUBIC,
-                }
-            )
-
-            if sys.stdout is None:
-                sys.stdout = open(os.devnull, "w")
-
-            flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
-
-            if trt_static_shape:
-                if encode is not None:
-                    flownet_inputs = (
-                        torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                        torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                        torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
-                        torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
-                        torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
-                    )
-
-                    encode_inputs = (torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),)
-                else:
-                    flownet_inputs = (
-                        torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                        torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                        torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
-                    )
-
-                flownet_dynamic_shapes = None
-                encode_dynamic_shapes = None
+                encode_inputs = (torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),)
             else:
-                trt_min_shape.reverse()
-                trt_opt_shape.reverse()
-                trt_max_shape.reverse()
+                flownet_inputs = (
+                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                    torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
+                )
 
-                if encode is not None:
-                    flownet_inputs = (
-                        torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                        torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                        torch.zeros([1, 1] + trt_opt_shape, dtype=dtype, device=device),
-                        torch.zeros([1, encode_channel] + trt_opt_shape, dtype=dtype, device=device),
-                        torch.zeros([1, encode_channel] + trt_opt_shape, dtype=dtype, device=device),
-                    )
-
-                    encode_inputs = (torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),)
-                else:
-                    flownet_inputs = (
-                        torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                        torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                        torch.zeros([1, 1] + trt_opt_shape, dtype=dtype, device=device),
-                    )
-
-                _height = torch.export.Dim("height", min=trt_min_shape[0] // tmp, max=trt_max_shape[0] // tmp)
-                _width = torch.export.Dim("width", min=trt_min_shape[1] // tmp, max=trt_max_shape[1] // tmp)
-                dim_height = _height * tmp
-                dim_width = _width * tmp
-
-                if encode is not None:
-                    flownet_dynamic_shapes = {
-                        "img0": {2: dim_height, 3: dim_width},
-                        "img1": {2: dim_height, 3: dim_width},
-                        "timestep": {2: dim_height, 3: dim_width},
-                        "f0": {2: dim_height, 3: dim_width},
-                        "f1": {2: dim_height, 3: dim_width},
-                    }
-
-                    encode_dynamic_shapes = ({2: dim_height, 3: dim_width},)
-                else:
-                    flownet_dynamic_shapes = {
-                        "img0": {2: dim_height, 3: dim_width},
-                        "img1": {2: dim_height, 3: dim_width},
-                        "timestep": {2: dim_height, 3: dim_width},
-                    }
-
-            flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
-
-            flownet = torch_tensorrt.dynamo.compile(
-                flownet_program,
-                flownet_inputs,
-                device=device,
-                debug=trt_debug,
-                num_avg_timing_iters=4,
-                workspace_size=trt_workspace_size,
-                min_block_size=1,
-                max_aux_streams=trt_max_aux_streams,
-                optimization_level=trt_optimization_level,
-                use_explicit_typing=True,
-            )
-
-            torch_tensorrt.save(flownet, flownet_engine_path, output_format="torchscript", inputs=flownet_inputs)
-
-            block0_program = torch.export.export(
-                block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
-            )
-
-            block0 = torch_tensorrt.dynamo.compile(
-                block0_program,
-                flownet_inputs,
-                device=device,
-                debug=trt_debug,
-                num_avg_timing_iters=4,
-                workspace_size=trt_workspace_size,
-                min_block_size=1,
-                max_aux_streams=trt_max_aux_streams,
-                optimization_level=trt_optimization_level,
-                use_explicit_typing=True,
-            )
-
-            torch_tensorrt.save(
-                block0, block0_engine_path, output_format="torchscript", inputs=flownet_inputs
-            )
+            flownet_dynamic_shapes = None
+            encode_dynamic_shapes = None
+        else:
+            trt_min_shape.reverse()
+            trt_opt_shape.reverse()
+            trt_max_shape.reverse()
 
             if encode is not None:
-                encode_program = torch.export.export(
-                    encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
+                flownet_inputs = (
+                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
+                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
+                    torch.zeros([1, 1] + trt_opt_shape, dtype=dtype, device=device),
+                    torch.zeros([1, encode_channel] + trt_opt_shape, dtype=dtype, device=device),
+                    torch.zeros([1, encode_channel] + trt_opt_shape, dtype=dtype, device=device),
                 )
 
-                encode = torch_tensorrt.dynamo.compile(
-                    encode_program,
-                    encode_inputs,
-                    device=device,
-                    enabled_precisions={dtype},
-                    debug=trt_debug,
-                    num_avg_timing_iters=4,
-                    workspace_size=trt_workspace_size,
-                    min_block_size=1,
-                    max_aux_streams=trt_max_aux_streams,
-                    optimization_level=trt_optimization_level,
+                encode_inputs = (torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),)
+            else:
+                flownet_inputs = (
+                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
+                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
+                    torch.zeros([1, 1] + trt_opt_shape, dtype=dtype, device=device),
                 )
 
-                torch_tensorrt.save(
-                    encode, encode_engine_path, output_format="torchscript", inputs=encode_inputs
-                )
+            _height = torch.export.Dim("height", min=trt_min_shape[0] // tmp, max=trt_max_shape[0] // tmp)
+            _width = torch.export.Dim("width", min=trt_min_shape[1] // tmp, max=trt_max_shape[1] // tmp)
+            dim_height = _height * tmp
+            dim_width = _width * tmp
 
-        flownet = torch.jit.load(flownet_engine_path).eval()
-        block0 = torch.jit.load(block0_engine_path).eval()
-        if Head is not None:
-            encode = torch.jit.load(encode_engine_path).eval()
+            if encode is not None:
+                flownet_dynamic_shapes = {
+                    "img0": {2: dim_height, 3: dim_width},
+                    "img1": {2: dim_height, 3: dim_width},
+                    "timestep": {2: dim_height, 3: dim_width},
+                    "f0": {2: dim_height, 3: dim_width},
+                    "f1": {2: dim_height, 3: dim_width},
+                }
+
+                encode_dynamic_shapes = ({2: dim_height, 3: dim_width},)
+            else:
+                flownet_dynamic_shapes = {
+                    "img0": {2: dim_height, 3: dim_width},
+                    "img1": {2: dim_height, 3: dim_width},
+                    "timestep": {2: dim_height, 3: dim_width},
+                }
+
+        flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
+
+        flownet = torch_tensorrt.dynamo.compile(
+            flownet_program,
+            flownet_inputs,
+            device=device,
+            debug=trt_debug,
+            num_avg_timing_iters=4,
+            workspace_size=trt_workspace_size,
+            min_block_size=1,
+            require_full_compilation=True,
+            pass_through_build_failures=True,
+            max_aux_streams=trt_max_aux_streams,
+            optimization_level=trt_optimization_level,
+            use_explicit_typing=True,
+            runtime_cache_path=flownet_runtime_cache,
+            use_python_runtime=True,
+        )
+
+        block0_program = torch.export.export(
+            block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
+        )
+
+        block0 = torch_tensorrt.dynamo.compile(
+            block0_program,
+            flownet_inputs,
+            device=device,
+            debug=trt_debug,
+            num_avg_timing_iters=4,
+            workspace_size=trt_workspace_size,
+            min_block_size=1,
+            require_full_compilation=True,
+            pass_through_build_failures=True,
+            max_aux_streams=trt_max_aux_streams,
+            optimization_level=trt_optimization_level,
+            use_explicit_typing=True,
+            runtime_cache_path=block0_runtime_cache,
+            use_python_runtime=True,
+        )
+
+        if encode is not None:
+            encode_program = torch.export.export(
+                encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
+            )
+
+            encode = torch_tensorrt.dynamo.compile(
+                encode_program,
+                encode_inputs,
+                device=device,
+                enabled_precisions={dtype},
+                debug=trt_debug,
+                num_avg_timing_iters=4,
+                workspace_size=trt_workspace_size,
+                min_block_size=1,
+                require_full_compilation=True,
+                pass_through_build_failures=True,
+                max_aux_streams=trt_max_aux_streams,
+                optimization_level=trt_optimization_level,
+                runtime_cache_path=encode_runtime_cache,
+                use_python_runtime=True,
+            )
+
+
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 

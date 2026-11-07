@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 from fractions import Fraction
@@ -27,12 +28,33 @@ def _frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor
 def _tensor_to_frame(
     tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream
 ) -> vs.VideoFrame:
-    tensor = tensor.squeeze(0).detach()
-    planes = [tensor[i].to("cpu", non_blocking=True) for i in range(frame.format.num_planes)]
-    stream.synchronize()
+    # TensorRT's default runtime may launch work on auxiliary CUDA streams.
+    # Synchronize the device, not only the VapourSynth callback stream, before
+    # exposing the result to NumPy/VapourSynth.
+    torch.cuda.synchronize(tensor.device)
+    tensor = tensor.detach().squeeze(0)
+    expected_shape = (frame.format.num_planes, frame.height, frame.width)
+    if tuple(tensor.shape) != expected_shape:
+        raise vs.Error(
+            f"gmfss: model returned tensor shape {tuple(tensor.shape)}; "
+            f"expected {expected_shape}"
+        )
+    if not torch.isfinite(tensor).all().item():
+        raise vs.Error("gmfss: TensorRT/PyTorch produced NaN or infinite output values")
+
+    # Materialize a contiguous CPU copy in the exact sample type of the
+    # destination frame. This avoids passing a half-precision or strided
+    # TensorRT buffer directly into VapourSynth's frame storage.
     output = frame.copy()
-    for i, plane in enumerate(planes):
-        np.copyto(np.asarray(output[i]), plane.numpy())
+    for i in range(frame.format.num_planes):
+        destination = np.asarray(output[i])
+        source = tensor[i].to(device="cpu", dtype=torch.from_numpy(destination).dtype).contiguous().numpy()
+        if source.shape != destination.shape:
+            raise vs.Error(
+                f"gmfss: output plane {i} has shape {source.shape}; "
+                f"expected {destination.shape}"
+            )
+        np.copyto(destination, source, casting="no")
     return output
 
 
@@ -50,12 +72,16 @@ def drba_gmfss(
     sc_threshold: float | None = None,
     linear: bool = False,
     trt: bool = False,
+    profile_dir: str | os.PathLike | None = None,
+    trt_cache_dir: str | os.PathLike | None = None,
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
-    With trt=True, FeatureNet and FusionNet are compiled lazily by
-    Torch-TensorRT for the clip's fixed padded dimensions. GMFlow, MetricNet,
-    auxiliary RIFE 4.25, DRM, and SoftSplat remain on the eager PyTorch path.
+    With trt=True, selected convolutional modules use TensorRT-RTX. DRM,
+    SoftSplat, GMFlow transformer/matching, and VapourSynth orchestration remain
+    outside the engine boundary by design. RTX import/build failures are fatal.
+    Set profile_dir to write one Chrome trace JSON per processed output frame.
+    Set trt_cache_dir to control where TensorRT-RTX runtime JIT caches are stored.
 
     The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
     from vsdrba/models by default. Use rife_weights to override its location.
@@ -127,15 +153,27 @@ def drba_gmfss(
 
     device = torch.device("cuda", device_index)
     torch.set_float32_matmul_precision("high")
+    cache_identity = hashlib.sha256()
+    for checkpoint in sorted(weights_path.glob("*.pkl")) + [rife_weights_path]:
+        stat = checkpoint.stat()
+        cache_identity.update(str(checkpoint.resolve()).encode("utf-8"))
+        cache_identity.update(str(stat.st_size).encode("ascii"))
+        cache_identity.update(str(stat.st_mtime_ns).encode("ascii"))
+    cache_identity.update(str(scale).encode("ascii"))
     try:
         model = GMFSS_UNION(
             weights=str(weights_path), scale=scale, device=device, trt=trt,
-            rife_weights=str(rife_weights_path),
+            rife_weights=str(rife_weights_path), trt_cache_dir=trt_cache_dir,
+            cache_key=cache_identity.hexdigest()[:16],
         )
     except Exception as exc:
         if trt:
-            raise vs.Error(f"gmfss: TensorRT initialization failed: {exc}") from exc
+            raise vs.Error(f"gmfss: TensorRT-RTX initialization failed: {exc}") from exc
         raise
+    profile_path = Path(profile_dir).expanduser() if profile_dir is not None else None
+    if profile_path is not None:
+        profile_path.mkdir(parents=True, exist_ok=True)
+
     width, height = clip.width, clip.height
     padded_width = math.ceil(width / 32) * 32
     padded_height = math.ceil(height / 32) * 32
@@ -158,9 +196,27 @@ def drba_gmfss(
                 image1 = F.pad(image1, padding)
                 image2 = F.pad(image2, padding)
 
-            outputs, _ = model.inference_ts_drba(
-                image0, image1, image2, [t], linear=linear
-            )
+            if profile_path is None:
+                outputs, _ = model.inference_ts_drba(
+                    image0, image1, image2, [t], linear=linear
+                )
+            else:
+                activities = [
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ]
+                with torch.profiler.profile(
+                    activities=activities,
+                    record_shapes=True,
+                    profile_memory=True,
+                ) as profiler:
+                    outputs, _ = model.inference_ts_drba(
+                        image0, image1, image2, [t], linear=linear
+                    )
+                torch.cuda.synchronize(device)
+                profiler.export_chrome_trace(
+                    str(profile_path / f"gmfss_frame_{n:06d}.json")
+                )
             output = outputs[0]
             if any(padding):
                 output = output[:, :, :height, :width]

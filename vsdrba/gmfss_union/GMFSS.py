@@ -48,11 +48,13 @@ class Model:
             state_dict = load_state_dict(f"{path}/{filename}")
             network.load_state_dict(state_dict, strict=True)
 
-    def reuse(self, img0, img1, scale):
-        feat11, feat12, feat13 = self.feat_ext(img0)
-        feat21, feat22, feat23 = self.feat_ext(img1)
-        feat_ext0 = [feat11, feat12, feat13]
-        feat_ext1 = [feat21, feat22, feat23]
+    def reuse(self, img0, img1, scale, feat_ext0=None):
+        # Adjacent pairs can share the already-computed features for img0.
+        if feat_ext0 is None:
+            with torch.profiler.record_function("GMFSS/FeatureNet"):
+                feat_ext0 = list(self.feat_ext(img0))
+        with torch.profiler.record_function("GMFSS/FeatureNet"):
+            feat_ext1 = list(self.feat_ext(img1))
 
         img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
@@ -63,13 +65,38 @@ class Model:
         else:
             imgf0, imgf1 = img0, img1
 
-        flow01 = self.flownet(imgf0, imgf1)
-        flow10 = self.flownet(imgf1, imgf0)
-        if scale != 1.0:
-            flow01 = F.interpolate(flow01, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) / scale
-            flow10 = F.interpolate(flow10, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) / scale
+        # GMFlow's two feature levels use attention split counts [2, 8].
+        # Pad its input to a multiple of 32 so both feature maps divide evenly,
+        # then crop/resize the predicted flow back to the unpadded half-res size.
+        target_height, target_width = imgf0.shape[-2:]
+        scaled_height, scaled_width = target_height, target_width
+        padded_height = ((target_height + 31) // 32) * 32
+        padded_width = ((target_width + 31) // 32) * 32
+        gmflow_pad = (0, padded_width - target_width, 0, padded_height - target_height)
+        if any(gmflow_pad):
+            imgf0 = F.pad(imgf0, gmflow_pad, mode="replicate")
+            imgf1 = F.pad(imgf1, gmflow_pad, mode="replicate")
 
-        metric0, metric1 = self.metricnet(img0, img1, flow01, flow10)
+        # One bidirectional pass shares GMFlow's CNN and transformer work.
+        with torch.profiler.record_function("GMFSS/GMFlow"):
+            flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
+        flow01, flow10 = flow_bidir.chunk(2, dim=0)
+        # Remove only the synthetic right/bottom border before any rescaling;
+        # resizing the padded field would distort vectors across the full image.
+        flow01 = flow01[..., :scaled_height, :scaled_width]
+        flow10 = flow10[..., :scaled_height, :scaled_width]
+        if scale != 1.0:
+            flow01 = F.interpolate(
+                flow01, size=(target_height, target_width),
+                mode="bilinear", align_corners=False,
+            ) / scale
+            flow10 = F.interpolate(
+                flow10, size=(target_height, target_width),
+                mode="bilinear", align_corners=False,
+            ) / scale
+
+        with torch.profiler.record_function("GMFSS/MetricNet"):
+            metric0, metric1 = self.metricnet(img0, img1, flow01, flow10)
         return flow01, flow10, metric0, metric1, feat_ext0, feat_ext1
 
     def inference(self, img0, img1, reuse_things, timestep0, timestep1, rife, enable_mask=True):
@@ -128,10 +155,11 @@ class Model:
             mask0, mask1 = get_mask(192, 0.25)
             feat1t3, feat2t3 = torch.where(mask0, feat2t3, feat1t3), torch.where(mask1, feat1t3, feat2t3)
 
-        out = self.fusionnet(
-            torch.cat([I1t, rife, I2t], dim=1),
-            torch.cat([feat1t1, feat2t1], dim=1),
-            torch.cat([feat1t2, feat2t2], dim=1),
-            torch.cat([feat1t3, feat2t3], dim=1),
-        )
+        with torch.profiler.record_function("GMFSS/FusionNet"):
+            out = self.fusionnet(
+                torch.cat([I1t, rife, I2t], dim=1),
+                torch.cat([feat1t1, feat2t1], dim=1),
+                torch.cat([feat1t2, feat2t2], dim=1),
+                torch.cat([feat1t3, feat2t3], dim=1),
+            )
         return torch.clamp(out, 0, 1)

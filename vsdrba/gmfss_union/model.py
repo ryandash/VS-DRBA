@@ -1,6 +1,8 @@
 """GMFSS Union tensor inference and RIFE auxiliary adapter."""
 
 import os
+import re
+import sys
 
 import torch
 import torch.nn.functional as F
@@ -11,6 +13,82 @@ from .utils import load_state_dict, resize
 from ..IFNet_HDv3_v4_25 import IFNet
 
 
+class _StrictTensorRTRTXModule(torch.nn.Module):
+    """Lazily export and compile one fixed-shape module with full RTX coverage."""
+
+    def __init__(self, module, label, cache_dir=None, cache_key="default"):
+        super().__init__()
+        self.module = module
+        self.label = label
+        self.cache_dir = cache_dir
+        self.cache_key = cache_key
+        self.compiled = None
+
+    def forward(self, *inputs):
+        if self.compiled is None:
+            try:
+                import tensorrt_rtx
+                import torch_tensorrt
+
+                exported = torch.export.export(self.module, tuple(inputs))
+                shape_key = "_".join(
+                    "x".join(str(int(dim)) for dim in tensor.shape)
+                    for tensor in inputs
+                )
+                dtype_key = str(inputs[0].dtype).replace("torch.", "")
+                device_key = re.sub(
+                    r"[^A-Za-z0-9_.-]+", "_",
+                    torch.cuda.get_device_name(inputs[0].device),
+                )
+                cache_path = None
+                if self.cache_dir is not None:
+                    os.makedirs(self.cache_dir, exist_ok=True)
+                    cache_name = (
+                        self.label + "_" + self.cache_key + "_" + shape_key + "_"
+                        + dtype_key + "_" + device_key + "_trt-"
+                        + str(tensorrt_rtx.__version__) + ".runtime_cache"
+                    )
+                    cache_path = os.path.join(self.cache_dir, cache_name)
+
+                self.compiled = torch_tensorrt.dynamo.compile(
+                    exported,
+                    inputs=list(inputs),
+                    enabled_precisions={torch.float16},
+                    optimization_level=3,
+                    min_block_size=1,
+                    require_full_compilation=True,
+                    pass_through_build_failures=True,
+                    runtime_cache_path=cache_path,
+                    use_python_runtime=True,
+                ).eval()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"TensorRT-RTX could not fully compile {self.label}; "
+                    f"no PyTorch fallback is permitted: {exc}"
+                ) from exc
+        return self.compiled(*inputs)
+
+
+class _MetricConvHead(torch.nn.Module):
+    """Module adapter for MetricNet's convolution-only head."""
+
+    def __init__(self, metricnet):
+        super().__init__()
+        self.metric_in = metricnet.metric_in
+        self.metric_net1 = metricnet.metric_net1
+        self.metric_net2 = metricnet.metric_net2
+        self.metric_net3 = metricnet.metric_net3
+        self.metric_out = metricnet.metric_out
+
+    def forward(self, feat):
+        feat = self.metric_in(feat)
+        feat = self.metric_net1(feat) + feat
+        feat = self.metric_net2(feat) + feat
+        feat = self.metric_net3(feat) + feat
+        metric = self.metric_out(feat) * 10
+        return metric[:, :1], metric[:, 1:2]
+
+
 class GMFSS_UNION:
     def __init__(
         self,
@@ -19,48 +97,14 @@ class GMFSS_UNION:
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         trt=False,
         rife_weights=None,
+        trt_cache_dir=None,
+        cache_key="default",
     ):
         self.model = Model()
         self.model.load_model(weights, -1)
         self.model.device(device)
         self.model.eval()
         self.ifnet = IFNet(scale=scale).to(device).eval()
-
-        self.trt = bool(trt)
-        if self.trt:
-            try:
-                import torch_tensorrt  # noqa: F401 - registers the TensorRT backend
-            except ImportError as exc:
-                raise RuntimeError(
-                    "TensorRT was requested, but torch_tensorrt could not be imported. "
-                    "Install a Torch-TensorRT build compatible with this PyTorch version."
-                ) from exc
-
-            # Begin with the two convolution-dominant modules that have clean,
-            # tensor-only interfaces. Compilation is lazy: engines are built
-            # on the first VapourSynth frame with the actual padded dimensions.
-            trt_options = {
-                "enabled_precisions": {torch.float16, torch.float32},
-                "optimization_level": 3,
-                "min_block_size": 3,
-                "pass_through_build_failures": True,
-            }
-            self.model.feat_ext = torch.compile(
-                self.model.feat_ext,
-                backend="tensorrt",
-                dynamic=False,
-                options=trt_options,
-            )
-            self.model.fusionnet = torch.compile(
-                self.model.fusionnet,
-                backend="tensorrt",
-                dynamic=False,
-                options=trt_options,
-            )
-            print(
-                "GMFSS TensorRT enabled for FeatureNet and FusionNet; "
-                "engines will build lazily for the first input shape."
-            )
 
         # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
         # 4 feature channels (the 4.26 Heavy encoder emits 16), so its weights
@@ -89,7 +133,64 @@ class GMFSS_UNION:
         if load_result.unexpected_keys:
             print(
                 "RIFE checkpoint loaded; ignored "
-                f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters."
+                f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters.",
+                file=sys.stderr,
+            )
+
+
+        self.trt = bool(trt)
+        if self.trt:
+            # TensorRT-RTX is a separate runtime from standard TensorRT.
+            # Import failures are fatal: never silently disable acceleration.
+            try:
+                import tensorrt_rtx
+                import torch_tensorrt
+            except Exception as exc:
+                raise RuntimeError(
+                    "TensorRT-RTX was requested but its runtime could not be imported. "
+                    "Install the matching torch-tensorrt-rtx and tensorrt-rtx packages."
+                ) from exc
+
+            self.model.feat_ext.half()
+            self.model.metricnet.half()
+            self.model.fusionnet.half()
+            self.ifnet.half()
+
+            # Compile only deliberately selected complete submodules.
+            # SoftSplat, DRM, GMFlow transformer/matching, and RIFE warping
+            # remain outside the engine boundary by design. Each selected
+            # module must compile fully; unsupported operators are fatal.
+            # Modules with custom warping or non-Tensor arguments stay outside
+            # the engine boundary intentionally rather than being partitioned
+            # into hidden eager fallback regions.
+            if trt_cache_dir is None:
+                trt_cache_dir = os.path.join(
+                    os.path.expanduser("~"), ".cache", "vsdrba", "tensorrt_rtx"
+                )
+            trt_cache_dir = os.path.realpath(os.path.expanduser(str(trt_cache_dir)))
+            os.makedirs(trt_cache_dir, exist_ok=True)
+
+            def cached(module, label):
+                return _StrictTensorRTRTXModule(
+                    module, label, cache_dir=trt_cache_dir, cache_key=cache_key
+                )
+
+            self.model.feat_ext = cached(self.model.feat_ext, "FeatureNet")
+            self.model.fusionnet = cached(self.model.fusionnet, "FusionNet")
+            self.model.metricnet.forward_conv_rtx = cached(
+                _MetricConvHead(self.model.metricnet), "MetricNet-convolution-head"
+            )
+            self.model.flownet.backbone = cached(
+                self.model.flownet.backbone, "GMFlow-CNN-backbone"
+            )
+            self.ifnet.encode = cached(self.ifnet.encode, "RIFE-encoder")
+
+            print(
+                f"TensorRT-RTX {tensorrt_rtx.__version__} enabled for FeatureNet, "
+                "MetricNet convolution head, FusionNet, GMFlow CNN backbone, "
+                "and RIFE encoder. Runtime JIT caches are persisted per module and input shape. "
+                "Full-engine compilation is enforced; unsupported modules stay outside the engine boundary.",
+                file=sys.stderr,
             )
 
         self.scale = scale
@@ -119,9 +220,11 @@ class GMFSS_UNION:
         elif any(pad):
             timestep = F.pad(timestep, pad, mode="replicate")
 
-        feat0 = self.ifnet.encode(img0)
-        feat1 = self.ifnet.encode(img1)
-        prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
+        with torch.profiler.record_function("GMFSS/RIFE_Encoder"):
+            feat0 = self.ifnet.encode(img0)
+            feat1 = self.ifnet.encode(img1)
+        with torch.profiler.record_function("GMFSS/RIFE_IFNet"):
+            prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
         return prediction[:, :, :original_height, :original_width]
 
     @torch.inference_mode()
@@ -149,7 +252,9 @@ class GMFSS_UNION:
     @torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu")
     def inference_ts_drba(self, I0, I1, I2, ts, reuse=None, linear=False):
         reuseI1I0 = self.model.reuse(I1, I0, self.scale) if reuse is None else reuse
-        reuseI1I2 = self.model.reuse(I1, I2, self.scale)
+        reuseI1I2 = self.model.reuse(
+            I1, I2, self.scale, feat_ext0=reuseI1I0[4]
+        )
 
         flow10, metric10 = reuseI1I0[0], reuseI1I0[2]
         flow12, metric12 = reuseI1I2[0], reuseI1I2[2]

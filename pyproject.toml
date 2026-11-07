@@ -34,6 +34,9 @@ dependencies = [
   "VapourSynth>=66",
 ]
 
+[project.optional-dependencies]
+rtx = ["torch-tensorrt-rtx==2.11.0"]
+
 [project.urls]
 Homepage = "https://github.com/routineLife1/VS-DRBA"
 Issues = "https://github.com/routineLife1/VS-DRBA/issues"
