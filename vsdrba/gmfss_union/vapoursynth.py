@@ -97,15 +97,17 @@ def drba_gmfss(
     if sc and sc_threshold is not None:
         scene_clip = clip.resize.Bicubic(format=vs.GRAY8, matrix_s="709").misc.SCDetect(sc_threshold)
 
+        source_clip = clip
+
         def copy_scene_props(n: int, frames: list[vs.VideoFrame]) -> vs.VideoFrame:
             output = frames[0].copy()
             output.props["_SceneChangePrev"] = frames[1].props.get("_SceneChangePrev", 0)
             output.props["_SceneChangeNext"] = frames[1].props.get("_SceneChangeNext", 0)
             return output
 
-        clip = clip.std.FrameEval(
-            lambda n: clip.std.ModifyFrame([clip, scene_clip], copy_scene_props),
-            clip_src=[clip, scene_clip],
+        clip = source_clip.std.FrameEval(
+            lambda n: source_clip.std.ModifyFrame([source_clip, scene_clip], copy_scene_props),
+            clip_src=[source_clip, scene_clip],
         )
 
     device = torch.device("cuda", device_index)
