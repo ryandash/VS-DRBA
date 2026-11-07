@@ -26,7 +26,7 @@ The input must be a constant-format RGBH or RGBS VapourSynth clip, contain at le
 
 `sc=True` uses existing `_SceneChangeNext` frame properties. Supply `sc_threshold` to run VapourSynth's `misc.SCDetect` first. `linear=True` selects the linear DRM variant.
 
-TensorRT is opt-in. On this branch, `trt=True` targets FeatureNet, MetricNet, and FusionNet; `gmflow_trt=True` targets GMFlow's CNN backbone; and `rife_trt=True` targets the RIFE 4.25 encoder and IFBlocks. GMFlow's transformer remains eager because Torch-TensorRT export currently fails on its partitioned-attention reshape/stride pattern. MetricNet and RIFE may still contain eager fallback regions. With all flags disabled, the original eager PyTorch/CUDA path is retained. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. GMFlow additionally pads its scaled half-resolution inputs to multiples of 32 before attention-window partitioning, then resizes/crops the flow to the original half-resolution dimensions. This makes reduced `scale` values such as `0.5` satisfy the model's [2, 8] attention split constraints. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
+TensorRT is opt-in. On this branch, `trt=True` targets FeatureNet, MetricNet, and FusionNet; `gmflow_trt=True` targets GMFlow's CNN backbone; and `rife_trt=True` targets the RIFE 4.25 encoder and IFBlocks. GMFlow's transformer remains eager because Torch-TensorRT export currently fails on its partitioned-attention reshape/stride pattern. MetricNet and RIFE may still contain eager fallback regions. With all flags disabled, the original eager PyTorch/CUDA path is retained. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. GMFlow additionally pads its scaled half-resolution inputs to multiples of 32 before attention-window partitioning, then resizes/crops the flow to the original half-resolution dimensions. This makes reduced `scale` values such as `0.5` satisfy the model's [2, 8] attention split constraints. GMFlow's transformer now uses PyTorch scaled-dot-product attention where available and caches shifted-window masks for repeated fixed-shape inference. These are performance experiments; compare output quality and steady-state FPS against the previous implementation on the target GPU. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
 
 ## Inference graph
 
@@ -57,7 +57,7 @@ This branch now has independent experimental TensorRT targets for FeatureNet, th
 - [ ] Validate MetricNet TensorRT partitions against eager MetricNet.
 - [ ] Validate bidirectional GMFlow flow ordering and parity against two eager directional passes.
 - [ ] Validate reduced-scale GMFlow padding and output parity/quality on real clips.
-- [ ] Benchmark the scaled-dot-product attention path against the original matmul/softmax implementation on the target GPU.
+- [ ] Benchmark the scaled-dot-product attention path and cached window masks against the original matmul/softmax implementation on the target GPU.
 - [ ] Validate RIFE encoder/IFBlock TensorRT outputs against eager RIFE 4.25.
 - [ ] Benchmark each TensorRT flag combination independently; compilation overhead and fallback partitions may erase expected gains.
 
