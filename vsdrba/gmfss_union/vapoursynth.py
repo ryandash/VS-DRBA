@@ -102,15 +102,14 @@ def drba_gmfss(
 
         source_clip = clip
 
-        def copy_scene_props(n: int, frames: list[vs.VideoFrame]) -> vs.VideoFrame:
-            output = frames[0].copy()
-            output.props["_SceneChangePrev"] = frames[1].props.get("_SceneChangePrev", 0)
-            output.props["_SceneChangeNext"] = frames[1].props.get("_SceneChangeNext", 0)
+        def copy_scene_props(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
+            output = f[0].copy()
+            output.props["_SceneChangePrev"] = f[1].props.get("_SceneChangePrev", 0)
+            output.props["_SceneChangeNext"] = f[1].props.get("_SceneChangeNext", 0)
             return output
 
-        clip = source_clip.std.FrameEval(
-            lambda n: source_clip.std.ModifyFrame([source_clip, scene_clip], copy_scene_props),
-            clip_src=[source_clip, scene_clip],
+        clip = source_clip.std.ModifyFrame(
+            [source_clip, scene_clip], copy_scene_props
         )
 
     device = torch.device("cuda", device_index)
@@ -124,14 +123,14 @@ def drba_gmfss(
     inference_lock = Lock()
 
     @torch.inference_mode()
-    def interpolate(n: int, frames: list[vs.VideoFrame]) -> vs.VideoFrame:
+    def interpolate(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
         t = (n * factor_den % factor_num) / factor_num
-        if t == 0 or (sc and frames[0].props.get("_SceneChangeNext", 0)):
-            return frames[0]
+        if t == 0 or (sc and f[0].props.get("_SceneChangeNext", 0)):
+            return f[0]
 
         with inference_lock, torch.cuda.stream(stream):
             image0, image1, image2 = [
-                _frame_to_tensor(frame, device) for frame in frames
+                _frame_to_tensor(frame, device) for frame in f
             ]
             if any(padding):
                 image0 = F.pad(image0, padding)
@@ -144,7 +143,7 @@ def drba_gmfss(
             output = outputs[0]
             if any(padding):
                 output = output[:, :, :height, :width]
-            return _tensor_to_frame(output, frames[0], stream)
+            return _tensor_to_frame(output, f[0], stream)
 
     clip0 = vs.core.std.Interleave([clip] * factor_num)
     clip1 = clip.std.DuplicateFrames(clip.num_frames - 1)[1:]
@@ -157,10 +156,7 @@ def drba_gmfss(
     if factor_den > 1:
         clip0, clip1, clip2 = clip0[::factor_den], clip1[::factor_den], clip2[::factor_den]
 
-    return clip0.std.FrameEval(
-        lambda n: clip0.std.ModifyFrame([clip0, clip1, clip2], interpolate),
-        clip_src=[clip0, clip1, clip2],
-    )
+    return clip0.std.ModifyFrame([clip0, clip1, clip2], interpolate)
 
 
 __all__ = ["drba_gmfss"]
