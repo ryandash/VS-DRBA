@@ -236,7 +236,7 @@ def drba_rife(
         try:
             import tensorrt
             import torch_tensorrt
-        except (ImportError, OSError) as exc:
+        except Exception as exc:
             warnings.warn(
                 f"rife: TensorRT is unavailable ({exc}); falling back to eager PyTorch inference.",
                 RuntimeWarning,
