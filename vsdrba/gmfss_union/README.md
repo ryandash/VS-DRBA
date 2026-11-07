@@ -53,40 +53,6 @@ The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.25,
 - [ ] Measure steady-state throughput and peak VRAM with TensorRT enabled versus eager execution.
 - [ ] Expand TensorRT coverage to MetricNet, GMFlow, and auxiliary RIFE only after component-level parity tests.
 
-## Component-level profiling
-
-Profiling is opt-in and runs inside the VapourSynth frame callback. The profiler is started and stopped on the same callback thread; do not wrap the entire VapourSynth render in an external `torch.profiler.profile` context. Profiling adds significant overhead, so do not use profiled runs to report normal playback FPS.
-
-```python
-from vsdrba import drba_gmfss
-
-clip = drba_gmfss(
-    clip,
-    factor_num=2,
-    factor_den=1,
-    trt=True,
-    profile_dir=r"D:\gmfss_traces",
-    profile_frames=3,
-    profile_skip_frames=4,
-)
-
-clip.set_output()
-```
-
-Render the clip using your usual VapourSynth host. The first interpolated frame triggers lazy TensorRT compilation; the default skip value is intended to avoid profiling that first build. Each selected interpolated frame writes a separate Chrome trace named `gmfss_frame_XXXXXX.json` into `profile_dir`. Set `profile_skip_frames=0` only when intentionally profiling cold-start and engine-build costs. `profile_frames` controls the number of traces captured.
-
-Open the JSON files in Perfetto (https://ui.perfetto.dev/) or `chrome://tracing`. Search for the `GMFSS/` ranges. The component ranges include:
-
-- `GMFSS/FeatureNet/frame0` and `frame1`: the two FeatureNet calls.
-- `GMFSS/GMFlow/center_to_prev` and `center_to_next`: both optical-flow directions.
-- `GMFSS/MetricNet`: MetricNet forward.
-- `GMFSS/DRM/GMFSS` and `GMFSS/DRM/Auxiliary_RIFE`: the two DRM paths, including tensor warps.
-- `GMFSS/Auxiliary_RIFE/Feature_Encode` and `IFNet_Forward`: auxiliary RIFE.
-- `GMFSS/SoftSplat/feature_and_rgb_warps`: RGB and multiscale feature warps.
-- `GMFSS/FusionNet`: final fusion network.
-
-The trace also includes CPU and CUDA operator events, input shapes, and memory activity. Compare CUDA kernel time inside each component range; do not sum parent and child durations. The captured frame is a steady-state sample only if TensorRT engine compilation has completed. Run an unprofiled render separately for true FPS.
-
 ### TensorRT expansion strategy
 
 Do not convert every remaining module at once. Use the traces to rank GMFlow, MetricNet, auxiliary RIFE, DRM, and SoftSplat by CUDA time. FeatureNet and FusionNet are passed through Torch-TensorRT, but that does not imply every operator is compiled: inspect the trace for fallback PyTorch operators and TensorRT engine execution. If GMFlow or MetricNet dominates, evaluate it as an isolated export target next; validate output parity on representative frames before enabling it in the full pipeline. DRM and SoftSplat include warping semantics and custom tensor operations, so keep them as explicit separate targets until numerical parity and performance are demonstrated.
