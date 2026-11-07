@@ -425,6 +425,8 @@ def drba_rife(
                     num_avg_timing_iters=4,
                     workspace_size=trt_workspace_size,
                     min_block_size=1,
+                    require_full_compilation=True,
+                    pass_through_build_failures=True,
                     max_aux_streams=trt_max_aux_streams,
                     optimization_level=trt_optimization_level,
                 )
