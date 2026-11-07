@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.gmflow.utils import split_feature, merge_splits
+from .utils import split_feature, merge_splits
 
 
 def single_head_full_attention(q, k, v):
