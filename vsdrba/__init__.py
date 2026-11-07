@@ -229,10 +229,22 @@ def drba_rife(
     if sc and sc_threshold is not None:
         clip = sc_detect(clip, sc_threshold)
 
+    # TensorRT is an optional acceleration backend. Keep the original eager
+    # PyTorch DBRA/RIFE path usable when TensorRT is absent from VapourSynth's
+    # Python environment, even if a script left trt=True in its arguments.
     if trt:
-        import tensorrt
-        import torch_tensorrt
+        try:
+            import tensorrt
+            import torch_tensorrt
+        except (ImportError, OSError) as exc:
+            warnings.warn(
+                f"rife: TensorRT is unavailable ({exc}); falling back to eager PyTorch inference.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            trt = False
 
+    if trt:
         if trt_static_shape:
             dimensions = f"{pw}x{ph}"
         else:
