@@ -27,12 +27,33 @@ def _frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor
 def _tensor_to_frame(
     tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream
 ) -> vs.VideoFrame:
-    tensor = tensor.squeeze(0).detach()
-    planes = [tensor[i].to("cpu", non_blocking=True) for i in range(frame.format.num_planes)]
-    stream.synchronize()
+    # TensorRT's default runtime may launch work on auxiliary CUDA streams.
+    # Synchronize the device, not only the VapourSynth callback stream, before
+    # exposing the result to NumPy/VapourSynth.
+    torch.cuda.synchronize(tensor.device)
+    tensor = tensor.detach().squeeze(0)
+    expected_shape = (frame.format.num_planes, frame.height, frame.width)
+    if tuple(tensor.shape) != expected_shape:
+        raise vs.Error(
+            f"gmfss: model returned tensor shape {tuple(tensor.shape)}; "
+            f"expected {expected_shape}"
+        )
+    if not torch.isfinite(tensor).all().item():
+        raise vs.Error("gmfss: TensorRT/PyTorch produced NaN or infinite output values")
+
+    # Materialize a contiguous CPU copy in the exact sample type of the
+    # destination frame. This avoids passing a half-precision or strided
+    # TensorRT buffer directly into VapourSynth's frame storage.
     output = frame.copy()
-    for i, plane in enumerate(planes):
-        np.copyto(np.asarray(output[i]), plane.numpy())
+    for i in range(frame.format.num_planes):
+        destination = np.asarray(output[i])
+        source = tensor[i].to(device="cpu", dtype=torch.from_numpy(destination).dtype).contiguous().numpy()
+        if source.shape != destination.shape:
+            raise vs.Error(
+                f"gmfss: output plane {i} has shape {source.shape}; "
+                f"expected {destination.shape}"
+            )
+        np.copyto(destination, source, casting="no")
     return output
 
 
