@@ -18,7 +18,7 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 ```
 pip install -U vsdrba==1.0.2
 ```
-The supported RIFE checkpoints are 4.25, 4.26, and 4.26 Heavy. To download these checkpoints, run `python -m vsdrba`. The GMFSS Union port is being developed in the `gmfss_union` package on the `feature/gmfss-union-milestone-1` branch.
+The supported RIFE checkpoints are 4.25, 4.26, and 4.26 Heavy. To download these checkpoints, run `python -m vsdrba`. GMFSS Union is implemented in the `vsdrba/gmfss_union` package on this branch.
 
 ## Usage
 ```python
@@ -30,7 +30,9 @@ ret = drba_rife(clip)
 See `__init__.py` for the description of the parameters.
 
 
-## Benchmarks
+## Historical benchmarks
+
+The results below are from earlier standard TensorRT configurations; they are not TensorRT-RTX benchmarks and do not validate the RTX backend on the current branch.
 
 | model                | scale | os    | hardware           | arch                                                       | fps 720 | fps 1080 | vram 720 | vram 1080 | backend                                                                        | verified output                    | batch | level | streams | threads | onnx      | onnxslim / onnxsim | onnx shape  | trtexec shape | precision | usage                                                                                               |
 |----------------------| ----- | ----- |--------------------|------------------------------------------------------------|---------|----------|----------|-----------|--------------------------------------------------------------------------------|------------------------------------|-------|-------|---------|---------|-----------|--------------------|-------------|---------------|-----------|-----------------------------------------------------------------------------------------------------|
@@ -81,7 +83,7 @@ Install the matching PyTorch CUDA 12.9 wheels and Torch-TensorRT-RTX:
 
 ```bat
 python -m pip install --index-url https://download.pytorch.org/whl/cu129 torch==2.11.0+cu129 torchvision==0.26.0+cu129
-python -m pip install torch-tensorrt-rtx==2.11.0 --extra-index-url https://download.pytorch.org/whl/torch-tensorrt-rtx
+python -m pip install --index-url https://download.pytorch.org/whl/torch-tensorrt-rtx --extra-index-url https://pypi.org/simple torch-tensorrt-rtx==2.11.0
 python -m pip install -U cupy-cuda12x
 python -m pip check
 ```
