@@ -64,13 +64,13 @@ class GMFSS_UNION:
             }
             self.model.feat_ext = torch.compile(
                 self.model.feat_ext,
-                backend="tensorrt",
+                backend="torch_tensorrt",
                 dynamic=False,
                 options=trt_options,
             )
             self.model.fusionnet = torch.compile(
                 self.model.fusionnet,
-                backend="tensorrt",
+                backend="torch_tensorrt",
                 dynamic=False,
                 options=trt_options,
             )
@@ -78,7 +78,7 @@ class GMFSS_UNION:
             # compile MetricNet's convolution-only feature-to-metric head.
             self.model.metricnet.forward_conv = torch.compile(
                 self.model.metricnet.forward_conv,
-                backend="tensorrt",
+                backend="torch_tensorrt",
                 dynamic=False,
                 options=trt_options,
             )
@@ -112,7 +112,7 @@ class GMFSS_UNION:
             }
             gmflow = self.model.flownet
             gmflow.backbone = torch.compile(
-                gmflow.backbone, backend="tensorrt", dynamic=False,
+                gmflow.backbone, backend="torch_tensorrt", dynamic=False,
                 options=gmflow_options,
             )
             print(
@@ -170,7 +170,7 @@ class GMFSS_UNION:
                 "pass_through_build_failures": True,
             }
             self.ifnet.encode = torch.compile(
-                self.ifnet.encode, backend="tensorrt", dynamic=False,
+                self.ifnet.encode, backend="torch_tensorrt", dynamic=False,
                 options=rife_options,
             )
             for name in ("block0", "block1", "block2", "block3", "block4"):
@@ -179,7 +179,7 @@ class GMFSS_UNION:
                     setattr(
                         self.ifnet, name,
                         torch.compile(
-                            block, backend="tensorrt", dynamic=False,
+                            block, backend="torch_tensorrt", dynamic=False,
                             options=rife_options,
                         ),
                     )
