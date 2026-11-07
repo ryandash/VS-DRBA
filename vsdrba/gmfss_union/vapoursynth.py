@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 from fractions import Fraction
@@ -72,6 +73,7 @@ def drba_gmfss(
     linear: bool = False,
     trt: bool = False,
     profile_dir: str | os.PathLike | None = None,
+    trt_cache_dir: str | os.PathLike | None = None,
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
@@ -79,6 +81,7 @@ def drba_gmfss(
     SoftSplat, GMFlow transformer/matching, and VapourSynth orchestration remain
     outside the engine boundary by design. RTX import/build failures are fatal.
     Set profile_dir to write one Chrome trace JSON per processed output frame.
+    Set trt_cache_dir to control where TensorRT-RTX runtime JIT caches are stored.
 
     The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
     from vsdrba/models by default. Use rife_weights to override its location.
@@ -150,10 +153,18 @@ def drba_gmfss(
 
     device = torch.device("cuda", device_index)
     torch.set_float32_matmul_precision("high")
+    cache_identity = hashlib.sha256()
+    for checkpoint in sorted(weights_path.glob("*.pkl")) + [rife_weights_path]:
+        stat = checkpoint.stat()
+        cache_identity.update(str(checkpoint.resolve()).encode("utf-8"))
+        cache_identity.update(str(stat.st_size).encode("ascii"))
+        cache_identity.update(str(stat.st_mtime_ns).encode("ascii"))
+    cache_identity.update(str(scale).encode("ascii"))
     try:
         model = GMFSS_UNION(
             weights=str(weights_path), scale=scale, device=device, trt=trt,
-            rife_weights=str(rife_weights_path),
+            rife_weights=str(rife_weights_path), trt_cache_dir=trt_cache_dir,
+            cache_key=cache_identity.hexdigest()[:16],
         )
     except Exception as exc:
         if trt:
