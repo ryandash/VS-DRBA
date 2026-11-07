@@ -1,6 +1,6 @@
 import torch.nn as nn
 
-from models.gmflow.trident_conv import MultiScaleTridentConv
+from .trident_conv import MultiScaleTridentConv
 
 
 class ResidualBlock(nn.Module):
