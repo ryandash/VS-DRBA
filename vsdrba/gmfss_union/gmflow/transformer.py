@@ -5,15 +5,25 @@ import torch.nn.functional as F
 from .utils import split_feature, merge_splits
 
 
+def _scaled_dot_product_attention(q, k, v, attn_mask=None):
+    """Use PyTorch SDPA (Flash/memory-efficient kernels when available)."""
+    if hasattr(F, "scaled_dot_product_attention"):
+        return F.scaled_dot_product_attention(
+            q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1),
+            attn_mask=attn_mask, dropout_p=0.0,
+        ).squeeze(1)
+
+    scores = torch.matmul(q, k.permute(0, 2, 1)) / (q.size(-1) ** 0.5)
+    if attn_mask is not None:
+        scores = scores + attn_mask
+    return torch.matmul(torch.softmax(scores, dim=-1), v)
+
+
 def single_head_full_attention(q, k, v):
     # q, k, v: [B, L, C]
     assert q.dim() == k.dim() == v.dim() == 3
 
-    scores = torch.matmul(q, k.permute(0, 2, 1)) / (q.size(2) ** .5)  # [B, L, L]
-    attn = torch.softmax(scores, dim=2)  # [B, L, L]
-    out = torch.matmul(attn, v)  # [B, L, C]
-
-    return out
+    return _scaled_dot_product_attention(q, k, v)
 
 
 def generate_shift_window_attn_mask(input_resolution, window_size_h, window_size_w,
@@ -83,15 +93,16 @@ def single_head_split_window_attention(q, k, v,
     k = split_feature(k, num_splits=num_splits, channel_last=True)
     v = split_feature(v, num_splits=num_splits, channel_last=True)
 
-    scores = torch.matmul(q.view(b_new, -1, c), k.view(b_new, -1, c).permute(0, 2, 1)
-                          ) / scale_factor  # [B*K*K, H/K*W/K, H/K*W/K]
-
+    q_windows = q.reshape(b_new, -1, c)
+    k_windows = k.reshape(b_new, -1, c)
+    v_windows = v.reshape(b_new, -1, c)
+    window_mask = None
     if with_shift:
-        scores += attn_mask.repeat(b, 1, 1)
+        window_mask = attn_mask.repeat(b, 1, 1).to(dtype=q.dtype).unsqueeze(1)
 
-    attn = torch.softmax(scores, dim=-1)
-
-    out = torch.matmul(attn, v.view(b_new, -1, c))  # [B*K*K, H/K*W/K, C]
+    out = _scaled_dot_product_attention(
+        q_windows, k_windows, v_windows, attn_mask=window_mask
+    )  # [B*K*K, H/K*W/K, C]
 
     out = merge_splits(out.view(b_new, h // num_splits, w // num_splits, c),
                        num_splits=num_splits, channel_last=True)  # [B, H, W, C]
