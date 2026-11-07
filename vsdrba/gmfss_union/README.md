@@ -41,7 +41,7 @@ The auxiliary network uses the standard RIFE 4.25 checkpoint `flownet_v4.25.pkl`
 
 ## TensorRT boundary
 
-The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.25, and FusionNet independently. DRM, SoftSplat, masks, and VapourSynth frame orchestration remain outside TensorRT until eager inference and numerical parity are established. The initial hardware target is the GeForce RTX 5070 Ti (Blackwell), batch 1, FP16, fixed spatial shapes.
+This branch now has independent experimental TensorRT targets for FeatureNet, the convolution-only MetricNet head, FusionNet, GMFlow's CNN backbone, and the RIFE 4.25 encoder/IFBlocks. GMFlow's transformer, DRM, SoftSplat, masks, and VapourSynth frame orchestration remain eager. The initial hardware target is the GeForce RTX 5070 Ti (Blackwell), batch 1, FP16/FP32, fixed spatial shapes. These paths are experimental until component parity, engine-build reliability, steady-state throughput, and peak VRAM are measured on real clips.
 
 ## Validation status
 
@@ -60,7 +60,7 @@ The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.25,
 
 ### TensorRT expansion strategy
 
-Do not convert every remaining module at once. Use the traces to rank GMFlow, MetricNet, auxiliary RIFE, DRM, and SoftSplat by CUDA time. FeatureNet and FusionNet are passed through Torch-TensorRT, but that does not imply every operator is compiled: inspect the trace for fallback PyTorch operators and TensorRT engine execution. If GMFlow or MetricNet dominates, evaluate it as an isolated export target next; validate output parity on representative frames before enabling it in the full pipeline. DRM and SoftSplat include warping semantics and custom tensor operations, so keep them as explicit separate targets until numerical parity and performance are demonstrated.
+Treat each flag as an independent experiment. Start with one target at a time, warm up every fixed-shape engine, and inspect profiler traces to distinguish TensorRT engine execution from eager fallback. Compare component outputs against eager execution before combining flags. Bidirectional GMFlow should be compared against two directional calls, including forward/backward ordering; the center-frame feature cache should be compared against independently extracted features. Keep DRM and SoftSplat eager because they include warping semantics and custom tensor operations.
 
 
 ## RIFE auxiliary model selection
