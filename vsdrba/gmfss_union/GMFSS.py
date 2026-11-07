@@ -48,8 +48,17 @@ class Model:
             state_dict = load_state_dict(f"{path}/{filename}")
             network.load_state_dict(state_dict, strict=True)
 
-    def extract_gmflow_features(self, *images, scale):
-        """Prepare and batch-extract GMFlow pyramids for adjacent frames."""
+    def extract_frame_features(self, *images):
+        """Run FeatureNet on adjacent frames as one batch and split its pyramids."""
+        batch = torch.cat(images, dim=0)
+        with torch.profiler.record_function("GMFSS/FeatureNetTriplet"):
+            features = self.feat_ext(batch)
+        return [
+            [feature[index:index + 1] for feature in features]
+            for index in range(len(images))
+        ]
+
+    def extract_gmflow_features(self, *images, scale):        """Prepare and batch-extract GMFlow pyramids for adjacent frames."""
         prepared = []
         for image in images:
             image = F.interpolate(image, scale_factor=0.5, mode="bilinear", align_corners=False)
@@ -64,13 +73,15 @@ class Model:
             prepared.append(image)
         return self.flownet.extract_features(prepared)
 
-    def reuse(self, img0, img1, scale, feat_ext0=None, gmflow_features=None):
-        # Adjacent pairs can share the already-computed features for img0.
-        if feat_ext0 is None:
+    def reuse(self, img0, img1, scale, feat_ext0=None, feat_ext1=None, gmflow_features=None):
+        # Adjacent pairs can share precomputed FeatureNet pyramids.
+        if feat_ext0 is None or feat_ext1 is None:
             with torch.profiler.record_function("GMFSS/FeatureNet"):
-                feat_ext0 = list(self.feat_ext(img0))
-        with torch.profiler.record_function("GMFSS/FeatureNet"):
-            feat_ext1 = list(self.feat_ext(img1))
+                features = self.feat_ext(torch.cat((img0, img1), dim=0))
+            if feat_ext0 is None:
+                feat_ext0 = [feature[:1] for feature in features]
+            if feat_ext1 is None:
+                feat_ext1 = [feature[1:2] for feature in features]
 
         img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
