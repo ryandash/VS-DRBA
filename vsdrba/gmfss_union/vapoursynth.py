@@ -52,12 +52,14 @@ def drba_gmfss(
     trt: bool = False,
     gmflow_trt: bool = False,
     rife_trt: bool = False,
+    profile_dir: str | os.PathLike | None = None,
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
     With trt=True, FeatureNet, MetricNet, and FusionNet use Torch-TensorRT.
     Set gmflow_trt=True for GMFlow's CNN backbone and rife_trt=True for the
     RIFE 4.25 encoder and IFBlocks. Unsupported operations remain eager.
+    Set profile_dir to write one Chrome trace JSON per processed output frame.
 
     The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
     from vsdrba/models by default. Use rife_weights to override its location.
@@ -139,6 +141,10 @@ def drba_gmfss(
         if trt or gmflow_trt or rife_trt:
             raise vs.Error(f"gmfss: TensorRT initialization failed: {exc}") from exc
         raise
+    profile_path = Path(profile_dir).expanduser() if profile_dir is not None else None
+    if profile_path is not None:
+        profile_path.mkdir(parents=True, exist_ok=True)
+
     width, height = clip.width, clip.height
     padded_width = math.ceil(width / 32) * 32
     padded_height = math.ceil(height / 32) * 32
@@ -161,9 +167,27 @@ def drba_gmfss(
                 image1 = F.pad(image1, padding)
                 image2 = F.pad(image2, padding)
 
-            outputs, _ = model.inference_ts_drba(
-                image0, image1, image2, [t], linear=linear
-            )
+            if profile_path is None:
+                outputs, _ = model.inference_ts_drba(
+                    image0, image1, image2, [t], linear=linear
+                )
+            else:
+                activities = [
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ]
+                with torch.profiler.profile(
+                    activities=activities,
+                    record_shapes=True,
+                    profile_memory=True,
+                ) as profiler:
+                    outputs, _ = model.inference_ts_drba(
+                        image0, image1, image2, [t], linear=linear
+                    )
+                torch.cuda.synchronize(device)
+                profiler.export_chrome_trace(
+                    str(profile_path / f"gmfss_frame_{n:06d}.json")
+                )
             output = outputs[0]
             if any(padding):
                 output = output[:, :, :height, :width]
