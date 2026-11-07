@@ -58,7 +58,10 @@ def drba_gmfss(
 
     With trt=True, FeatureNet and FusionNet are compiled lazily by
     Torch-TensorRT for the clip's fixed padded dimensions. GMFlow, MetricNet,
-    auxiliary RIFE, DRM, and SoftSplat remain on the eager PyTorch path.
+    auxiliary RIFE 4.25, DRM, and SoftSplat remain on the eager PyTorch path.
+
+    The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
+    from vsdrba/models by default. Use rife_weights to override its location.
 
     Set profile_dir to capture one Chrome trace per selected interpolated
     frame. Profiling is disabled by default. profile_skip_frames skips the
