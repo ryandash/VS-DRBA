@@ -155,10 +155,11 @@ class Model:
             mask0, mask1 = get_mask(192, 0.25)
             feat1t3, feat2t3 = torch.where(mask0, feat2t3, feat1t3), torch.where(mask1, feat1t3, feat2t3)
 
-        out = self.fusionnet(
-            torch.cat([I1t, rife, I2t], dim=1),
-            torch.cat([feat1t1, feat2t1], dim=1),
-            torch.cat([feat1t2, feat2t2], dim=1),
-            torch.cat([feat1t3, feat2t3], dim=1),
-        )
+        with torch.profiler.record_function("GMFSS/FusionNet"):
+            out = self.fusionnet(
+                torch.cat([I1t, rife, I2t], dim=1),
+                torch.cat([feat1t1, feat2t1], dim=1),
+                torch.cat([feat1t2, feat2t2], dim=1),
+                torch.cat([feat1t3, feat2t3], dim=1),
+            )
         return torch.clamp(out, 0, 1)
