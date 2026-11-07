@@ -69,6 +69,7 @@ class Model:
         # Pad its input to a multiple of 32 so both feature maps divide evenly,
         # then crop/resize the predicted flow back to the unpadded half-res size.
         target_height, target_width = imgf0.shape[-2:]
+        scaled_height, scaled_width = target_height, target_width
         padded_height = ((target_height + 31) // 32) * 32
         padded_width = ((target_width + 31) // 32) * 32
         gmflow_pad = (0, padded_width - target_width, 0, padded_height - target_height)
@@ -80,7 +81,11 @@ class Model:
         with torch.profiler.record_function("GMFSS/GMFlow"):
             flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
         flow01, flow10 = flow_bidir.chunk(2, dim=0)
-        if scale != 1.0 or any(gmflow_pad):
+        # Remove only the synthetic right/bottom border before any rescaling;
+        # resizing the padded field would distort vectors across the full image.
+        flow01 = flow01[..., :scaled_height, :scaled_width]
+        flow10 = flow10[..., :scaled_height, :scaled_width]
+        if scale != 1.0:
             flow01 = F.interpolate(
                 flow01, size=(target_height, target_width),
                 mode="bilinear", align_corners=False,
