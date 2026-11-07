@@ -29,6 +29,16 @@ def distance_calculator(flow: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(u.square() + v.square()).to(dtype)
 
 
+_ones_cache: dict[tuple[str, str], torch.Tensor] = {}
+
+
+def get_ones_tensor_size(size: tuple, device, dtype: torch.dtype) -> torch.Tensor:
+    key = (str(device), str(size))
+    if key not in _ones_cache:
+        _ones_cache[key] = torch.ones(size, device=device, dtype=dtype, requires_grad=False)
+    return _ones_cache[key]
+
+
 def load_state_dict(path: str | Path) -> dict[str, torch.Tensor]:
     """Load a plain or wrapped checkpoint and normalize DataParallel prefixes."""
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=True)
