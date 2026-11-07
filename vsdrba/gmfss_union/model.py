@@ -12,6 +12,38 @@ from .utils import load_state_dict, resize
 from ..IFNet_HDv3_v4_25 import IFNet
 
 
+class _StrictTensorRTRTXModule(torch.nn.Module):
+    """Lazily export and compile one fixed-shape module with full RTX coverage."""
+
+    def __init__(self, module, label):
+        super().__init__()
+        self.module = module
+        self.label = label
+        self.compiled = None
+
+    def forward(self, *inputs):
+        if self.compiled is None:
+            try:
+                import torch_tensorrt
+
+                exported = torch.export.export(self.module, tuple(inputs))
+                self.compiled = torch_tensorrt.dynamo.compile(
+                    exported,
+                    inputs=list(inputs),
+                    enabled_precisions={torch.float16},
+                    optimization_level=3,
+                    min_block_size=1,
+                    require_full_compilation=True,
+                    pass_through_build_failures=True,
+                ).eval()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"TensorRT-RTX could not fully compile {self.label}; "
+                    f"no PyTorch fallback is permitted: {exc}"
+                ) from exc
+        return self.compiled(*inputs)
+
+
 class GMFSS_UNION:
     def __init__(
         self,
@@ -49,44 +81,30 @@ class GMFSS_UNION:
             # GMFlow transformer/matching, and RIFE warping remain outside the
             # engine boundary by design. Build failures in an RTX partition
             # raise instead of being silently passed through to eager execution.
-            rtx_options = {
-                "enabled_precisions": {torch.float16},
-                "optimization_level": 3,
-                "min_block_size": 1,
-                "pass_through_build_failures": True,
-            }
-
-            def compile_rtx(module, label):
-                try:
-                    return torch.compile(
-                        module,
-                        backend="tensorrt",
-                        dynamic=False,
-                        options=rtx_options,
-                    )
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"TensorRT-RTX setup failed while preparing {label}: {exc}"
-                    ) from exc
-
-            self.model.feat_ext = compile_rtx(self.model.feat_ext, "FeatureNet")
-            self.model.fusionnet = compile_rtx(self.model.fusionnet, "FusionNet")
-            self.model.metricnet.forward_conv = compile_rtx(
+            # Compile complete modules with require_full_compilation=True.
+            # Modules with custom warping or non-Tensor arguments stay outside
+            # the engine boundary intentionally rather than being partitioned
+            # into hidden eager fallback regions.
+            self.model.feat_ext = _StrictTensorRTRTXModule(
+                self.model.feat_ext, "FeatureNet"
+            )
+            self.model.fusionnet = _StrictTensorRTRTXModule(
+                self.model.fusionnet, "FusionNet"
+            )
+            self.model.metricnet.forward_conv = _StrictTensorRTRTXModule(
                 self.model.metricnet.forward_conv, "MetricNet convolution head"
             )
-            self.model.flownet.backbone = compile_rtx(
+            self.model.flownet.backbone = _StrictTensorRTRTXModule(
                 self.model.flownet.backbone, "GMFlow CNN backbone"
             )
-            self.ifnet.encode = compile_rtx(self.ifnet.encode, "RIFE encoder")
-            for name in ("block0", "block1", "block2", "block3", "block4"):
-                block_module = getattr(self.ifnet, name, None)
-                if block_module is not None:
-                    setattr(self.ifnet, name, compile_rtx(block_module, f"RIFE {name}"))
+            self.ifnet.encode = _StrictTensorRTRTXModule(
+                self.ifnet.encode, "RIFE encoder"
+            )
 
             print(
                 f"TensorRT-RTX {tensorrt_rtx.__version__} enabled for FeatureNet, "
                 "MetricNet convolution head, FusionNet, GMFlow CNN backbone, "
-                "and RIFE encoder/IFBlocks. Engines compile on first use.",
+                "and RIFE encoder. Full-engine compilation is enforced; unsupported modules stay outside the engine boundary.",
                 file=sys.stderr,
             )
 
