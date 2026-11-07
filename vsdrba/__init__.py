@@ -96,7 +96,7 @@ def drba_rife(
     :param sc:                      Avoid interpolating frames over scene changes.
     :param sc_threshold:            Threshold for scene change detection. Must be between 0.0 and 1.0.
                                     Leave the argument as None if the frames already have _SceneChangeNext property set.
-    :param trt:                     Use TensorRT for high-performance inference.
+    :param trt:                     Use TensorRT-RTX for high-performance inference.
                                     Not supported in '4.0' and '4.1' models.
     :param trt_static_shape:        Build with static or dynamic shapes.
     :param trt_min_shape:           Min size of dynamic shapes. Ignored if trt_static_shape=True.
@@ -149,7 +149,7 @@ def drba_rife(
         raise vs.Error("rife: scale must be 0.25, 0.5, 1.0, 2.0, or 4.0")
 
     if not trt_static_shape:
-        raise vs.Error("rife: dynamic shapes is not allowed at the moment due to issues in Torch-TensorRT")
+        raise vs.Error("rife: dynamic shapes is not allowed at the moment due to issues in TensorRT-RTX")
 
         if not isinstance(trt_min_shape, list) or len(trt_min_shape) != 2:
             raise vs.Error("rife: trt_min_shape must be a list with 2 items")
@@ -402,6 +402,8 @@ def drba_rife(
                 num_avg_timing_iters=4,
                 workspace_size=trt_workspace_size,
                 min_block_size=1,
+                require_full_compilation=True,
+                pass_through_build_failures=True,
                 max_aux_streams=trt_max_aux_streams,
                 optimization_level=trt_optimization_level,
                 use_explicit_typing=True,
