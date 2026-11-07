@@ -112,9 +112,11 @@ class GMFSS_UNION:
         elif any(pad):
             timestep = F.pad(timestep, pad, mode="replicate")
 
-        feat0 = self.ifnet.encode(img0)
-        feat1 = self.ifnet.encode(img1)
-        prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
+        with torch.profiler.record_function("GMFSS/Auxiliary_RIFE/Feature_Encode"):
+            feat0 = self.ifnet.encode(img0)
+            feat1 = self.ifnet.encode(img1)
+        with torch.profiler.record_function("GMFSS/Auxiliary_RIFE/IFNet_Forward"):
+            prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
         return prediction[:, :, :original_height, :original_width]
 
     @torch.inference_mode()
@@ -161,9 +163,11 @@ class GMFSS_UNION:
                 output.append(I2)
             elif 0 < t < 1:
                 t = 1 - t
-                drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
+                with torch.profiler.record_function("GMFSS/DRM/GMFSS"):
+                    drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
+                with torch.profiler.record_function("GMFSS/DRM/Auxiliary_RIFE"):
+                    drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
+                    drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
                 rife = self._rife_inference(I1s, I0s, drm_rife["drm_t1_t01"])
                 output.append(
                     self.model.inference(
@@ -175,9 +179,11 @@ class GMFSS_UNION:
                 )
             elif 1 < t < 2:
                 t = t - 1
-                drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
+                with torch.profiler.record_function("GMFSS/DRM/GMFSS"):
+                    drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
+                with torch.profiler.record_function("GMFSS/DRM/Auxiliary_RIFE"):
+                    drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
+                    drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
                 rife = self._rife_inference(I1s, I2s, drm_rife["drm_t1_t12"])
                 output.append(
                     self.model.inference(
