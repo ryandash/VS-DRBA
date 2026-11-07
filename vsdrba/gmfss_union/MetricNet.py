@@ -56,10 +56,13 @@ class MetricNet(nn.Module):
         flow = torch.cat((flow01, flow10), 1)
         occ = torch.cat((fwd_occ.unsqueeze(1), bwd_occ.unsqueeze(1)), 1)
 
-        feat = self.metric_in(torch.cat((img, metric, flow, occ), 1))
+        return self.forward_conv(torch.cat((img, metric, flow, occ), 1))
+
+    def forward_conv(self, feat):
+        """Convolution-only MetricNet head, isolated for TensorRT compilation."""
+        feat = self.metric_in(feat)
         feat = self.metric_net1(feat) + feat
         feat = self.metric_net2(feat) + feat
         feat = self.metric_net3(feat) + feat
         metric = self.metric_out(feat) * 10
-
         return metric[:, :1], metric[:, 1:2]

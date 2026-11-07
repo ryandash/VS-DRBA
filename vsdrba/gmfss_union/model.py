@@ -59,11 +59,10 @@ class GMFSS_UNION:
                 dynamic=False,
                 options=trt_options,
             )
-            # MetricNet mixes convolutions with grid_sample and consistency
-            # operations. Torch-TensorRT can partition supported regions and
-            # leave unsupported tensor operations in eager PyTorch.
-            self.model.metricnet = torch.compile(
-                self.model.metricnet,
+            # Keep grid_sample and forward/backward consistency eager; only
+            # compile MetricNet's convolution-only feature-to-metric head.
+            self.model.metricnet.forward_conv = torch.compile(
+                self.model.metricnet.forward_conv,
                 backend="tensorrt",
                 dynamic=False,
                 options=trt_options,
