@@ -1,6 +1,5 @@
 """GMFSS Union tensor inference and RIFE auxiliary adapter."""
 
-import logging
 import os
 import sys
 import warnings
@@ -55,10 +54,6 @@ class GMFSS_UNION:
                     "TensorRT was requested, but torch_tensorrt could not be imported. "
                     "Install a Torch-TensorRT build compatible with this PyTorch version."
                 ) from exc
-
-            # Keep TensorRT's native warning logger off stdout: vspipe reserves
-            # stdout for its Y4M stream. Suppress warnings before lazy builds.
-            torch_tensorrt.logging.set_level(logging.ERROR)
 
             # Keep TensorRT partitions internally consistent with the FP16
             # autocast inference path. Exporting FP32 weights with inserted
