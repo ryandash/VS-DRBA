@@ -52,8 +52,9 @@ def drba_gmfss(
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
-    GMFSS currently runs in eager PyTorch/CUDA. TensorRT is intentionally
-    rejected until its component engines have been validated.
+    With trt=True, FeatureNet and FusionNet are compiled lazily by
+    Torch-TensorRT for the clip's fixed padded dimensions. GMFlow, MetricNet,
+    auxiliary RIFE, DRM, and SoftSplat remain on the eager PyTorch path.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("gmfss: input is not a VapourSynth clip")
@@ -65,8 +66,6 @@ def drba_gmfss(
         raise vs.Error("gmfss: CUDA is not available")
     if device_index < 0 or device_index >= torch.cuda.device_count():
         raise vs.Error("gmfss: device_index is outside the available CUDA devices")
-    if trt:
-        raise vs.Error("gmfss: TensorRT is not implemented yet; use trt=False")
     if factor_num < 1 or factor_den < 1:
         raise vs.Error("gmfss: factor_num and factor_den must be positive")
     if scale not in (0.25, 0.5, 1.0, 2.0, 4.0):
@@ -114,7 +113,14 @@ def drba_gmfss(
 
     device = torch.device("cuda", device_index)
     torch.set_float32_matmul_precision("high")
-    model = GMFSS_UNION(weights=str(weights_path), scale=scale, device=device)
+    try:
+        model = GMFSS_UNION(
+            weights=str(weights_path), scale=scale, device=device, trt=trt
+        )
+    except Exception as exc:
+        if trt:
+            raise vs.Error(f"gmfss: TensorRT initialization failed: {exc}") from exc
+        raise
     width, height = clip.width, clip.height
     padded_width = math.ceil(width / 32) * 32
     padded_height = math.ceil(height / 32) * 32
