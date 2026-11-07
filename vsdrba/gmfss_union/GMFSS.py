@@ -58,7 +58,8 @@ class Model:
             for index in range(len(images))
         ]
 
-    def extract_gmflow_features(self, *images, scale):        """Prepare and batch-extract GMFlow pyramids for adjacent frames."""
+    def extract_gmflow_features(self, *images, scale):
+        """Prepare and batch-extract GMFlow pyramids for adjacent frames."""
         prepared = []
         for image in images:
             image = F.interpolate(image, scale_factor=0.5, mode="bilinear", align_corners=False)
