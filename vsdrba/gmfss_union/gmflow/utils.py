@@ -1,5 +1,5 @@
 import torch
-from models.gmflow.position import PositionEmbeddingSine
+from .position import PositionEmbeddingSine
 
 
 def split_feature(feature,
