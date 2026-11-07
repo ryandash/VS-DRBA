@@ -1,11 +1,5 @@
+from .softsplat import softsplat as warp
 from .utils import distance_calculator
-
-if check_cupy_env():
-    from .softsplat.softsplat import softsplat as warp
-else:
-    print("System does not have CUDA installed, falling back to PyTorch")
-    from .softsplat.softsplat_torch import softsplat as warp
-
 
 def get_drm_t(drm, t, precision=1e-3):
     """
