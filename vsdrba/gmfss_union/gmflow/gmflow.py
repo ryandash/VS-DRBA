@@ -64,6 +64,18 @@ class GMFlow(nn.Module):
 
         return feature0, feature1
 
+    def extract_features(self, images):
+        """Extract one pyramid for each image in a single batched backbone pass."""
+        normalized = [normalize_img(image, image)[0] for image in images]
+        batch = torch.cat(normalized, dim=0)
+        with torch.profiler.record_function("GMFlow/Backbone"):
+            features = self.backbone(batch)
+        features = features[::-1]
+        return [
+            [feature[index:index + 1] for feature in features]
+            for index in range(len(images))
+        ]
+
     def upsample_flow(self, flow, feature, bilinear=False, upsample_factor=8,
                       ):
         if bilinear:
@@ -94,13 +106,17 @@ class GMFlow(nn.Module):
                 corr_radius_list=[-1, 4],
                 prop_radius_list=[-1, 1],
                 pred_bidir_flow=False,
+                feature0_list=None,
+                feature1_list=None,
                 **kwargs,
                 ):
 
         img0, img1 = normalize_img(img0, img1)  # [B, 3, H, W]
 
         # resolution low to high
-        feature0_list, feature1_list = self.extract_feature(img0, img1)  # list of features
+        if feature0_list is None or feature1_list is None:
+            with torch.profiler.record_function("GMFlow/Backbone"):
+                feature0_list, feature1_list = self.extract_feature(img0, img1)
 
         flow = None
 
@@ -130,15 +146,18 @@ class GMFlow(nn.Module):
             feature0, feature1 = feature_add_position(feature0, feature1, attn_splits, self.feature_channels)
 
             # Transformer
-            feature0, feature1 = self.transformer(feature0, feature1, attn_num_splits=attn_splits)
+            with torch.profiler.record_function("GMFlow/Transformer"):
+                feature0, feature1 = self.transformer(feature0, feature1, attn_num_splits=attn_splits)
 
             # correlation and softmax
             if corr_radius == -1:  # global matching
                 # flow_pred = global_correlation_softmax(feature0, feature1, pred_bidir_flow)[0]
-                flow_pred, correlation = global_correlation_softmax(feature0, feature1, pred_bidir_flow)
+                with torch.profiler.record_function("GMFlow/GlobalCorrelation"):
+                    flow_pred, correlation = global_correlation_softmax(feature0, feature1, pred_bidir_flow)
             else:  # local matching
                 # flow_pred = local_correlation_softmax(feature0, feature1, corr_radius)[0]
-                flow_pred, match_prob = local_correlation_softmax(feature0, feature1, corr_radius)
+                with torch.profiler.record_function("GMFlow/LocalCorrelation"):
+                    flow_pred, match_prob = local_correlation_softmax(feature0, feature1, corr_radius)
 
 
 
@@ -152,16 +171,18 @@ class GMFlow(nn.Module):
             # flow propagation with self-attn
             if pred_bidir_flow and scale_idx == 0:
                 feature0 = torch.cat((feature0, feature1), dim=0)  # [2*B, C, H, W] for propagation
-            flow = self.feature_flow_attn(feature0, flow.detach(),
-                                          local_window_attn=prop_radius > 0,
-                                          local_window_radius=prop_radius)
+            with torch.profiler.record_function("GMFlow/FlowAttention"):
+                flow = self.feature_flow_attn(feature0, flow.detach(),
+                                              local_window_attn=prop_radius > 0,
+                                              local_window_radius=prop_radius)
 
             # bilinear upsampling at training time except the last one
             if self.training and scale_idx < self.num_scales - 1:
                 flow_up = self.upsample_flow(flow, feature0, bilinear=True, upsample_factor=upsample_factor)
 
             if scale_idx == self.num_scales - 1:
-                flow_up = self.upsample_flow(flow, feature0)
+                with torch.profiler.record_function("GMFlow/Upsampling"):
+                    flow_up = self.upsample_flow(flow, feature0)
 
         # from index import get_mask
         # import cv2
