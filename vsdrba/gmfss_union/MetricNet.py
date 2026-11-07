@@ -41,6 +41,9 @@ class MetricNet(nn.Module):
             nn.Conv2d(64, 2, 3, 1, 1),
             nn.Tanh()
         )
+        # Optional strict TensorRT-RTX adapter; None preserves the original
+        # checkpoint-compatible eager method until the adapter is installed.
+        self.forward_conv_rtx = None
 
     def forward(self, img0, img1, flow01, flow10):
         metric0 = F.l1_loss(img0, backwarp(img1, flow01), reduction='none').mean([1], True)
@@ -56,7 +59,10 @@ class MetricNet(nn.Module):
         flow = torch.cat((flow01, flow10), 1)
         occ = torch.cat((fwd_occ.unsqueeze(1), bwd_occ.unsqueeze(1)), 1)
 
-        return self.forward_conv(torch.cat((img, metric, flow, occ), 1))
+        features = torch.cat((img, metric, flow, occ), 1)
+        if self.forward_conv_rtx is not None:
+            return self.forward_conv_rtx(features)
+        return self.forward_conv(features)
 
     def forward_conv(self, feat):
         """Convolution-only MetricNet head, isolated for TensorRT compilation."""
