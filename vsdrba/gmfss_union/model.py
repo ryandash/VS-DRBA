@@ -199,9 +199,11 @@ class GMFSS_UNION:
         elif any(pad):
             timestep = F.pad(timestep, pad, mode="replicate")
 
-        feat0 = self.ifnet.encode(img0)
-        feat1 = self.ifnet.encode(img1)
-        prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
+        with torch.profiler.record_function("GMFSS/RIFE_Encoder"):
+            feat0 = self.ifnet.encode(img0)
+            feat1 = self.ifnet.encode(img1)
+        with torch.profiler.record_function("GMFSS/RIFE_IFNet"):
+            prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
         return prediction[:, :, :original_height, :original_width]
 
     @torch.inference_mode()
