@@ -24,7 +24,7 @@ Initial target: GeForce RTX 5070 Ti (Blackwell), batch 1, FP16, fixed shapes. Va
 - [x] Define shared TensorRT build settings for the per-network engines.
 - [x] Retain only RIFE 4.25, 4.26, and 4.26 Heavy in the public RIFE selector and downloader.
 - [x] Remove other RIFE implementation modules.
-- [ ] Port the original GMFlow, FeatureNet, MetricNet, FusionNet, and GMFSS orchestration modules.
-- [ ] Add and verify all five GMFSS Union checkpoints.
+- [x] Bring over GMFlow, FeatureNet, MetricNet, FusionNet, GMFSS orchestration, DRM, and SoftSplat; rewrite imports to remain inside `vsdrba.gmfss_union`.
+- [x] Add all five GMFSS Union checkpoint files to the repository.\n- [ ] Verify checkpoint integrity and strict state-dict compatibility on the target GPU.
 - [ ] Add eager PyTorch parity tests and per-network TensorRT export tests.
 - [ ] Integrate the VapourSynth public API after eager inference is correct.
