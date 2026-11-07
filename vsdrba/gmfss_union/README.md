@@ -14,16 +14,17 @@ clip = drba_gmfss(
     scale=1.0,
     sc=True,
     trt=False,
+    gmflow_trt=False,
 )
 ```
 
-Set `trt=True` to enable the experimental TensorRT path for FeatureNet and FusionNet. Their engines compile lazily on the first interpolated frame and are specialized to the padded clip dimensions. The first frame can therefore take substantially longer while engines are built. GMFlow, MetricNet, auxiliary RIFE, DRM, and SoftSplat remain on eager PyTorch/CUDA. The initial implementation allows FP16 and FP32 TensorRT precisions; it does not promise that every operation in either network becomes a TensorRT engine. Keep `trt=False` as the baseline and fallback.
+Set `trt=True` to enable the experimental TensorRT path for FeatureNet and FusionNet. On the experimental `feature/gmflow-tensorrt` branch, also set `gmflow_trt=True` to compile GMFlow's CNN backbone, transformer, flow-propagation attention, and convex upsampler independently. Their engines compile lazily on the first interpolated frame and are specialized to the padded clip dimensions. The first frame can therefore take substantially longer while engines are built. GMFlow matching, grid sampling, MetricNet, auxiliary RIFE, DRM, and SoftSplat remain on eager PyTorch/CUDA. The initial implementation allows FP16 and FP32 TensorRT precisions; it does not promise that every operation in either network becomes a TensorRT engine. Keep `trt=False` as the baseline and fallback.
 
 The input must be a constant-format RGBH or RGBS VapourSynth clip, contain at least two frames, and have CUDA available. The default checkpoint directory is `vsdrba/gmfss_union/weights/train_log_gmfss_union`; pass `weights=...` to override it. `factor_num/factor_den` controls the output frame-rate multiplier. Alternatively, specify both `fps_num` and `fps_den` to request an absolute output frame rate.
 
 `sc=True` uses existing `_SceneChangeNext` frame properties. Supply `sc_threshold` to run VapourSynth's `misc.SCDetect` first. `linear=True` selects the linear DRM variant.
 
-TensorRT is opt-in and currently targets FeatureNet and FusionNet only. `trt=False` retains the original eager PyTorch/CUDA execution path. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
+TensorRT is opt-in. On this branch, `gmflow_trt=True` additionally targets selected GMFlow submodules. Compilation can fall back for unsupported subgraphs, so inspect runtime logs and benchmark rather than assuming the entire GMFlow graph is accelerated. `trt=False` retains the original eager PyTorch/CUDA execution path. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
 
 ## Inference graph
 
