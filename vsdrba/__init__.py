@@ -704,3 +704,7 @@ def tensor_to_frame(tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cu
     for plane in range(frame.format.num_planes):
         np.copyto(np.asarray(frame[plane]), tensors[plane].numpy())
     return frame
+
+
+# GMFSS Union is exposed separately from the RIFE model selector.
+from .gmfss_union import drba_gmfss
