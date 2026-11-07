@@ -1,7 +1,7 @@
 """Smoke-test the standard Torch-TensorRT backend on the active Python environment.
 
 Run from the repository root:
-    python scripts/verify_tensorrt.py
+    python -m vsdrba.verify_tensorrt
 
 This deliberately builds a tiny fixed-shape FP16 engine. It is a backend
 validation test, not a performance benchmark.
@@ -14,7 +14,7 @@ import sys
 
 import torch
 import tensorrt
-import torch_tensorrt  # noqa: F401 - registers the torch.compile backend
+import torch_tensorrt  # noqa: F401 - registers the Torch-TensorRT torch.compile backend
 
 
 def main() -> int:
@@ -42,7 +42,7 @@ def main() -> int:
 
     compiled = torch.compile(
         model,
-        backend="tensorrt",
+        backend="torch_tensorrt",
         dynamic=False,
         options={
             "enabled_precisions": {torch.float16},
