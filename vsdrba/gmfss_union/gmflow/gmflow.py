@@ -111,12 +111,13 @@ class GMFlow(nn.Module):
                 **kwargs,
                 ):
 
-        img0, img1 = normalize_img(img0, img1)  # [B, 3, H, W]
-
-        # resolution low to high
+        # Cached pyramids are already normalized; avoid redundant image normalization.
         if feature0_list is None or feature1_list is None:
+            img0, img1 = normalize_img(img0, img1)  # [B, 3, H, W]
             with torch.profiler.record_function("GMFlow/Backbone"):
                 feature0_list, feature1_list = self.extract_feature(img0, img1)
+
+        # resolution low to high
 
         flow = None
 
