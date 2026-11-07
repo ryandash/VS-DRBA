@@ -131,7 +131,7 @@ class GMFSS_UNION:
             )
             print(
                 "Experimental GMFlow TensorRT enabled for the CNN backbone only; "
-                "transformer, matching, attention, and upsampling remain eager."
+                "transformer, matching, attention, and upsampling remain eager.",
                 file=sys.stderr,
             )
 
@@ -162,7 +162,7 @@ class GMFSS_UNION:
         if load_result.unexpected_keys:
             print(
                 "RIFE checkpoint loaded; ignored "
-                f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters."
+                f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters.",
                 file=sys.stderr,
             )
 
@@ -203,7 +203,7 @@ class GMFSS_UNION:
                     )
             print(
                 "Experimental RIFE TensorRT enabled for the encoder and IFBlocks; "
-                "engines will build lazily for the fixed pyramid shapes."
+                "engines will build lazily for the fixed pyramid shapes.",
                 file=sys.stderr,
             )
 
