@@ -50,12 +50,13 @@ def drba_gmfss(
     sc_threshold: float | None = None,
     linear: bool = False,
     trt: bool = False,
+    gmflow_trt: bool = False,
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
-    With trt=True, FeatureNet and FusionNet are compiled lazily by
-    Torch-TensorRT for the clip's fixed padded dimensions. GMFlow, MetricNet,
-    auxiliary RIFE 4.25, DRM, and SoftSplat remain on the eager PyTorch path.
+    With trt=True, FeatureNet and FusionNet use Torch-TensorRT. Set
+    gmflow_trt=True to additionally compile selected GMFlow submodules;
+    matching, grid sampling, and warping remain on eager PyTorch.
 
     The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
     from vsdrba/models by default. Use rife_weights to override its location.
@@ -130,10 +131,10 @@ def drba_gmfss(
     try:
         model = GMFSS_UNION(
             weights=str(weights_path), scale=scale, device=device, trt=trt,
-            rife_weights=str(rife_weights_path),
+            gmflow_trt=gmflow_trt, rife_weights=str(rife_weights_path),
         )
     except Exception as exc:
-        if trt:
+        if trt or gmflow_trt:
             raise vs.Error(f"gmfss: TensorRT initialization failed: {exc}") from exc
         raise
     width, height = clip.width, clip.height
