@@ -111,9 +111,8 @@ def drba_rife(
     :param trt_optimization_level:  Builder optimization level. Higher level allows TensorRT to spend more building time
                                     for more optimization options. Valid values include integers from 0 to the maximum
                                     optimization level, which is currently 5. (default is 3)
-    :param trt_cache_dir:           Directory for TensorRT engine file. Engine will be cached when it's built for the
-                                    first time. Note each engine is created for specific settings such as model
-                                    path/name, precision, workspace etc, and specific GPUs and it's not portable.
+    :param trt_cache_dir:           Directory for TensorRT-RTX runtime JIT caches. Cached kernels are reused on
+                                    subsequent runs when the model, input shape, precision, GPU, and runtime match.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("rife: this is not a clip")
