@@ -97,11 +97,10 @@ class GMFSS_UNION:
             self.model.fusionnet.half()
             self.ifnet.half()
 
-            # Compile only deliberately selected submodules. SoftSplat, DRM,
-            # GMFlow transformer/matching, and RIFE warping remain outside the
-            # engine boundary by design. Build failures in an RTX partition
-            # raise instead of being silently passed through to eager execution.
-            # Compile complete modules with require_full_compilation=True.
+            # Compile only deliberately selected complete submodules.
+            # SoftSplat, DRM, GMFlow transformer/matching, and RIFE warping
+            # remain outside the engine boundary by design. Each selected
+            # module must compile fully; unsupported operators are fatal.
             # Modules with custom warping or non-Tensor arguments stay outside
             # the engine boundary intentionally rather than being partitioned
             # into hidden eager fallback regions.
