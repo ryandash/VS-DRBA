@@ -54,10 +54,18 @@ class GMFSS_UNION:
                     "Install a Torch-TensorRT build compatible with this PyTorch version."
                 ) from exc
 
+            # Keep TensorRT partitions internally consistent with the FP16
+            # autocast inference path. Exporting FP32 weights with inserted
+            # FP16 casts can trigger unsupported mixed-precision convolution
+            # tactics in TensorRT 10.15 on some GPUs.
+            self.model.feat_ext.half()
+            self.model.metricnet.half()
+            self.model.fusionnet.half()
+
             # Compile the convolution-dominant GMFSS modules independently.
-            # Compilation is lazy and engines specialize to the input shape.
+            # Use one explicit precision; unsupported operations stay eager.
             trt_options = {
-                "enabled_precisions": {torch.float16, torch.float32},
+                "enabled_precisions": {torch.float16},
                 "optimization_level": 3,
                 "min_block_size": 3,
                 # Fall back to eager PyTorch for partitions whose mixed-precision
@@ -107,7 +115,7 @@ class GMFSS_UNION:
             # transformer, matching, flow attention, and upsampler eager until
             # each has an independently validated export path.
             gmflow_options = {
-                "enabled_precisions": {torch.float16, torch.float32},
+                "enabled_precisions": {torch.float16},
                 "optimization_level": 3,
                 "min_block_size": 3,
                 # Fall back to eager PyTorch for partitions whose mixed-precision
@@ -168,7 +176,7 @@ class GMFSS_UNION:
             # separate fixed-shape modules. Warping and pyramid orchestration
             # remain in eager PyTorch.
             rife_options = {
-                "enabled_precisions": {torch.float16, torch.float32},
+                "enabled_precisions": {torch.float16},
                 "optimization_level": 3,
                 "min_block_size": 3,
                 # Fall back to eager PyTorch for partitions whose mixed-precision
