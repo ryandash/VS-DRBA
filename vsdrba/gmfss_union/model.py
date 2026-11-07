@@ -1,6 +1,7 @@
 """GMFSS Union tensor inference and RIFE auxiliary adapter."""
 
 import os
+import re
 import sys
 
 import torch
@@ -15,18 +16,40 @@ from ..IFNet_HDv3_v4_25 import IFNet
 class _StrictTensorRTRTXModule(torch.nn.Module):
     """Lazily export and compile one fixed-shape module with full RTX coverage."""
 
-    def __init__(self, module, label):
+    def __init__(self, module, label, cache_dir=None, cache_key="default"):
         super().__init__()
         self.module = module
         self.label = label
+        self.cache_dir = cache_dir
+        self.cache_key = cache_key
         self.compiled = None
 
     def forward(self, *inputs):
         if self.compiled is None:
             try:
+                import tensorrt_rtx
                 import torch_tensorrt
 
                 exported = torch.export.export(self.module, tuple(inputs))
+                shape_key = "_".join(
+                    "x".join(str(int(dim)) for dim in tensor.shape)
+                    for tensor in inputs
+                )
+                dtype_key = str(inputs[0].dtype).replace("torch.", "")
+                device_key = re.sub(
+                    r"[^A-Za-z0-9_.-]+", "_",
+                    torch.cuda.get_device_name(inputs[0].device),
+                )
+                cache_path = None
+                if self.cache_dir is not None:
+                    os.makedirs(self.cache_dir, exist_ok=True)
+                    cache_name = (
+                        self.label + "_" + self.cache_key + "_" + shape_key + "_"
+                        + dtype_key + "_" + device_key + "_trt-"
+                        + str(tensorrt_rtx.__version__) + ".runtime_cache"
+                    )
+                    cache_path = os.path.join(self.cache_dir, cache_name)
+
                 self.compiled = torch_tensorrt.dynamo.compile(
                     exported,
                     inputs=list(inputs),
@@ -35,6 +58,8 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     min_block_size=1,
                     require_full_compilation=True,
                     pass_through_build_failures=True,
+                    runtime_cache_path=cache_path,
+                    use_python_runtime=True,
                 ).eval()
             except Exception as exc:
                 raise RuntimeError(
@@ -72,6 +97,8 @@ class GMFSS_UNION:
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         trt=False,
         rife_weights=None,
+        trt_cache_dir=None,
+        cache_key="default",
     ):
         self.model = Model()
         self.model.load_model(weights, -1)
@@ -136,26 +163,33 @@ class GMFSS_UNION:
             # Modules with custom warping or non-Tensor arguments stay outside
             # the engine boundary intentionally rather than being partitioned
             # into hidden eager fallback regions.
-            self.model.feat_ext = _StrictTensorRTRTXModule(
-                self.model.feat_ext, "FeatureNet"
+            if trt_cache_dir is None:
+                trt_cache_dir = os.path.join(
+                    os.path.expanduser("~"), ".cache", "vsdrba", "tensorrt_rtx"
+                )
+            trt_cache_dir = os.path.realpath(os.path.expanduser(str(trt_cache_dir)))
+            os.makedirs(trt_cache_dir, exist_ok=True)
+
+            def cached(module, label):
+                return _StrictTensorRTRTXModule(
+                    module, label, cache_dir=trt_cache_dir, cache_key=cache_key
+                )
+
+            self.model.feat_ext = cached(self.model.feat_ext, "FeatureNet")
+            self.model.fusionnet = cached(self.model.fusionnet, "FusionNet")
+            self.model.metricnet.forward_conv_rtx = cached(
+                _MetricConvHead(self.model.metricnet), "MetricNet-convolution-head"
             )
-            self.model.fusionnet = _StrictTensorRTRTXModule(
-                self.model.fusionnet, "FusionNet"
+            self.model.flownet.backbone = cached(
+                self.model.flownet.backbone, "GMFlow-CNN-backbone"
             )
-            self.model.metricnet.forward_conv_rtx = _StrictTensorRTRTXModule(
-                _MetricConvHead(self.model.metricnet), "MetricNet convolution head"
-            )
-            self.model.flownet.backbone = _StrictTensorRTRTXModule(
-                self.model.flownet.backbone, "GMFlow CNN backbone"
-            )
-            self.ifnet.encode = _StrictTensorRTRTXModule(
-                self.ifnet.encode, "RIFE encoder"
-            )
+            self.ifnet.encode = cached(self.ifnet.encode, "RIFE-encoder")
 
             print(
                 f"TensorRT-RTX {tensorrt_rtx.__version__} enabled for FeatureNet, "
                 "MetricNet convolution head, FusionNet, GMFlow CNN backbone, "
-                "and RIFE encoder. Full-engine compilation is enforced; unsupported modules stay outside the engine boundary.",
+                "and RIFE encoder. Runtime JIT caches are persisted per module and input shape. "
+                "Full-engine compilation is enforced; unsupported modules stay outside the engine boundary.",
                 file=sys.stderr,
             )
 
