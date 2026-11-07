@@ -48,7 +48,23 @@ class Model:
             state_dict = load_state_dict(f"{path}/{filename}")
             network.load_state_dict(state_dict, strict=True)
 
-    def reuse(self, img0, img1, scale, feat_ext0=None):
+    def extract_gmflow_features(self, *images, scale):
+        """Prepare and batch-extract GMFlow pyramids for adjacent frames."""
+        prepared = []
+        for image in images:
+            image = F.interpolate(image, scale_factor=0.5, mode="bilinear", align_corners=False)
+            if scale != 1.0:
+                image = F.interpolate(image, scale_factor=scale, mode="bilinear", align_corners=False)
+            height, width = image.shape[-2:]
+            padded_height = ((height + 31) // 32) * 32
+            padded_width = ((width + 31) // 32) * 32
+            pad = (0, padded_width - width, 0, padded_height - height)
+            if any(pad):
+                image = F.pad(image, pad, mode="replicate")
+            prepared.append(image)
+        return self.flownet.extract_features(prepared)
+
+    def reuse(self, img0, img1, scale, feat_ext0=None, gmflow_features=None):
         # Adjacent pairs can share the already-computed features for img0.
         if feat_ext0 is None:
             with torch.profiler.record_function("GMFSS/FeatureNet"):
@@ -79,7 +95,14 @@ class Model:
 
         # One bidirectional pass shares GMFlow's CNN and transformer work.
         with torch.profiler.record_function("GMFSS/GMFlow"):
-            flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
+            if gmflow_features is None:
+                flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
+            else:
+                flow_bidir = self.flownet(
+                    imgf0, imgf1, pred_bidir_flow=True,
+                    feature0_list=gmflow_features[0],
+                    feature1_list=gmflow_features[1],
+                )
         flow01, flow10 = flow_bidir.chunk(2, dim=0)
         # Remove only the synthetic right/bottom border before any rescaling;
         # resizing the padded field would distort vectors across the full image.
