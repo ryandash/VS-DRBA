@@ -251,10 +251,29 @@ class GMFSS_UNION:
     @torch.inference_mode()
     @torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu")
     def inference_ts_drba(self, I0, I1, I2, ts, reuse=None, linear=False):
-        reuseI1I0 = self.model.reuse(I1, I0, self.scale) if reuse is None else reuse
-        reuseI1I2 = self.model.reuse(
-            I1, I2, self.scale, feat_ext0=reuseI1I0[4]
-        )
+        if reuse is None:
+            # GMFlow's CNN backbone is frame-local. Extract all three frame
+            # pyramids together so the shared center frame is processed only once.
+            with torch.profiler.record_function("GMFSS/GMFlowTripletBackbone"):
+                gmflow_features = self.model.extract_gmflow_features(
+                    I1, I0, I2, scale=self.scale
+                )
+            reuseI1I0 = self.model.reuse(
+                I1, I0, self.scale, gmflow_features=(gmflow_features[0], gmflow_features[1])
+            )
+            reuseI1I2 = self.model.reuse(
+                I1, I2, self.scale, feat_ext0=reuseI1I0[4],
+                gmflow_features=(gmflow_features[0], gmflow_features[2]),
+            )
+        else:
+            reuseI1I0 = reuse
+            gmflow_features = self.model.extract_gmflow_features(
+                I1, I2, scale=self.scale
+            )
+            reuseI1I2 = self.model.reuse(
+                I1, I2, self.scale, feat_ext0=reuseI1I0[4],
+                gmflow_features=(gmflow_features[0], gmflow_features[1]),
+            )
 
         flow10, metric10 = reuseI1I0[0], reuseI1I0[2]
         flow12, metric12 = reuseI1I2[0], reuseI1I2[2]
