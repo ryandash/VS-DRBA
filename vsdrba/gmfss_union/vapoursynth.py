@@ -86,6 +86,9 @@ def drba_gmfss(
         raise vs.Error("gmfss: target frame rate must be higher than source frame rate")
 
     package_weights = Path(__file__).resolve().parent / "weights" / "train_log_gmfss_union"
+    if not package_weights.is_dir():
+        # Source checkout layout keeps the checkpoints at repository-root weights/.
+        package_weights = Path(__file__).resolve().parents[2] / "weights" / "train_log_gmfss_union"
     weights_path = Path(weights).expanduser() if weights is not None else package_weights
     if not weights_path.is_dir():
         raise vs.Error(f"gmfss: checkpoint directory does not exist: {weights_path}")
