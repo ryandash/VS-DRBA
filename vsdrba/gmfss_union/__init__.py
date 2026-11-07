@@ -1,7 +1,6 @@
-"""GMFSS Union implementation for VapourSynth DRBA.
+"""GMFSS Union VapourSynth integration, separate from the RIFE selector."""
 
-The model is being ported as a separate pipeline from the RIFE-only API.
-See README.md in this package for the inference graph and porting boundaries.
-"""
+from .model import GMFSS_UNION
+from .vapoursynth import drba_gmfss
 
-__all__: list[str] = []
+__all__ = ["GMFSS_UNION", "drba_gmfss"]
