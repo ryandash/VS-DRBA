@@ -96,7 +96,8 @@ class GMFSS_UNION:
             print(
                 "GMFSS TensorRT enabled for FeatureNet, MetricNet, and FusionNet; "
                 "engines will build lazily for the first input shape."
-            , file=sys.stderr)
+                file=sys.stderr,
+            )
 
         self.gmflow_trt = bool(gmflow_trt)
         if self.gmflow_trt:
@@ -131,7 +132,8 @@ class GMFSS_UNION:
             print(
                 "Experimental GMFlow TensorRT enabled for the CNN backbone only; "
                 "transformer, matching, attention, and upsampling remain eager."
-            , file=sys.stderr)
+                file=sys.stderr,
+            )
 
         # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
         # 4 feature channels (the 4.26 Heavy encoder emits 16), so its weights
@@ -161,7 +163,8 @@ class GMFSS_UNION:
             print(
                 "RIFE checkpoint loaded; ignored "
                 f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters."
-            , file=sys.stderr)
+                file=sys.stderr,
+            )
 
         self.rife_trt = bool(rife_trt)
         if self.rife_trt:
@@ -201,7 +204,8 @@ class GMFSS_UNION:
             print(
                 "Experimental RIFE TensorRT enabled for the encoder and IFBlocks; "
                 "engines will build lazily for the fixed pyramid shapes."
-            , file=sys.stderr)
+                file=sys.stderr,
+            )
 
         self.scale = scale
         self.rife_weights = str(rife_weights)
