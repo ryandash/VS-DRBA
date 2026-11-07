@@ -35,40 +35,7 @@ warnings.filterwarnings("ignore", "The given NumPy array is not writable")
 model_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "models")
 
 models = [
-    "4.0",
-    "4.1",
-    "4.2",
-    "4.3",
-    "4.4",
-    "4.5",
-    "4.6",
-    "4.7",
-    "4.8",
-    "4.9",
-    "4.10",
-    "4.11",
-    "4.12",
-    "4.12.lite",
-    "4.13",
-    "4.13.lite",
-    "4.14",
-    "4.14.lite",
-    "4.15",
-    "4.15.lite",
-    "4.16.lite",
-    "4.17",
-    "4.17.lite",
-    "4.18",
-    "4.19",
-    "4.20",
-    "4.21",
-    "4.22",
-    "4.22.lite",
-    "4.23",
-    "4.24",
     "4.25",
-    "4.25.lite",
-    "4.25.heavy",
     "4.26",
     "4.26.heavy",
 ]
@@ -223,198 +190,8 @@ def drba_rife(
 
     modulo = 32
     match model:
-        case "4.0":
-            from .IFNet_HDv3_v4_0 import IFNet
-
-            Head = None
-        case "4.1":
-            from .IFNet_HDv3_v4_1 import IFNet
-
-            Head = None
-        case "4.2":
-            from .IFNet_HDv3_v4_2 import IFNet
-
-            Head = None
-        case "4.3":
-            from .IFNet_HDv3_v4_3 import IFNet
-
-            Head = None
-        case "4.4":
-            from .IFNet_HDv3_v4_4 import IFNet
-
-            Head = None
-        case "4.5":
-            from .IFNet_HDv3_v4_5 import IFNet
-
-            Head = None
-        case "4.6":
-            from .IFNet_HDv3_v4_6 import IFNet
-
-            Head = None
-        case "4.7":
-            from .IFNet_HDv3_v4_7 import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(nn.Conv2d(3, 16, 3, 2, 1), nn.ConvTranspose2d(16, 4, 4, 2, 1))
-            encode_channel = 4
-        case "4.8":
-            from .IFNet_HDv3_v4_8 import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(nn.Conv2d(3, 16, 3, 2, 1), nn.ConvTranspose2d(16, 4, 4, 2, 1))
-            encode_channel = 4
-        case "4.9":
-            from .IFNet_HDv3_v4_9 import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(nn.Conv2d(3, 16, 3, 2, 1), nn.ConvTranspose2d(16, 4, 4, 2, 1))
-            encode_channel = 4
-        case "4.10":
-            from .IFNet_HDv3_v4_10 import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(
-                    nn.Conv2d(3, 32, 3, 2, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.ConvTranspose2d(32, 8, 4, 2, 1),
-                )
-            encode_channel = 8
-        case "4.11":
-            from .IFNet_HDv3_v4_11 import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(
-                    nn.Conv2d(3, 32, 3, 2, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.ConvTranspose2d(32, 8, 4, 2, 1),
-                )
-            encode_channel = 8
-        case "4.12":
-            from .IFNet_HDv3_v4_12 import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(
-                    nn.Conv2d(3, 32, 3, 2, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.ConvTranspose2d(32, 8, 4, 2, 1),
-                )
-            encode_channel = 8
-        case "4.12.lite":
-            from .IFNet_HDv3_v4_12_lite import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(
-                    nn.Conv2d(3, 32, 3, 2, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.ConvTranspose2d(32, 4, 4, 2, 1),
-                )
-            encode_channel = 4
-        case "4.13":
-            from .IFNet_HDv3_v4_13 import Head, IFNet
-
-            encode_channel = 8
-        case "4.13.lite":
-            from .IFNet_HDv3_v4_13_lite import IFNet
-
-            with torch.device("meta"):
-                Head = nn.Sequential(
-                    nn.Conv2d(3, 32, 3, 2, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.Conv2d(32, 32, 3, 1, 1),
-                    nn.LeakyReLU(0.2, True),
-                    nn.ConvTranspose2d(32, 4, 4, 2, 1),
-                )
-            encode_channel = 4
-        case "4.14":
-            from .IFNet_HDv3_v4_14 import Head, IFNet
-
-            encode_channel = 8
-        case "4.14.lite":
-            from .IFNet_HDv3_v4_14_lite import Head, IFNet
-
-            encode_channel = 8
-        case "4.15":
-            from .IFNet_HDv3_v4_15 import Head, IFNet
-
-            encode_channel = 8
-        case "4.15.lite":
-            from .IFNet_HDv3_v4_15_lite import Head, IFNet
-
-            encode_channel = 4
-        case "4.16.lite":
-            from .IFNet_HDv3_v4_16_lite import Head, IFNet
-
-            encode_channel = 4
-        case "4.17":
-            from .IFNet_HDv3_v4_17 import Head, IFNet
-
-            encode_channel = 8
-        case "4.17.lite":
-            from .IFNet_HDv3_v4_17_lite import Head, IFNet
-
-            encode_channel = 4
-        case "4.18":
-            from .IFNet_HDv3_v4_18 import Head, IFNet
-
-            encode_channel = 8
-        case "4.19":
-            from .IFNet_HDv3_v4_19 import Head, IFNet
-
-            encode_channel = 8
-        case "4.20":
-            from .IFNet_HDv3_v4_20 import Head, IFNet
-
-            encode_channel = 8
-        case "4.21":
-            from .IFNet_HDv3_v4_21 import Head, IFNet
-
-            encode_channel = 8
-        case "4.22":
-            from .IFNet_HDv3_v4_22 import Head, IFNet
-
-            encode_channel = 8
-        case "4.22.lite":
-            from .IFNet_HDv3_v4_22_lite import Head, IFNet
-
-            encode_channel = 4
-        case "4.23":
-            from .IFNet_HDv3_v4_23 import Head, IFNet
-
-            encode_channel = 8
-        case "4.24":
-            from .IFNet_HDv3_v4_24 import Head, IFNet
-
-            encode_channel = 8
         case "4.25":
             from .IFNet_HDv3_v4_25 import Head, IFNet
-
-            encode_channel = 4
-            modulo = 64
-        case "4.25.lite":
-            from .IFNet_HDv3_v4_25_lite import Head, IFNet
-
-            encode_channel = 4
-            modulo = 128
-        case "4.25.heavy":
-            from .IFNet_HDv3_v4_25_heavy import Head, IFNet
 
             encode_channel = 4
             modulo = 64
@@ -927,3 +704,7 @@ def tensor_to_frame(tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cu
     for plane in range(frame.format.num_planes):
         np.copyto(np.asarray(frame[plane]), tensors[plane].numpy())
     return frame
+
+
+# GMFSS Union is exposed separately from the RIFE model selector.
+from .gmfss_union import drba_gmfss

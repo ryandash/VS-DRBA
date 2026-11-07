@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vsdrba"
 version = "1.0.1"
-description = "DRBA_RIFE function for VapourSynth"
+description = "DRBA RIFE and GMFSS Union frame interpolation for VapourSynth"
 readme = "README.md"
 requires-python = ">=3.10"
 license-files = { paths = ["LICENSE"] }
@@ -37,3 +37,6 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/routineLife1/VS-DRBA"
 Issues = "https://github.com/routineLife1/VS-DRBA/issues"
+
+[tool.hatch.build.targets.wheel.force-include]
+"weights/train_log_gmfss_union" = "vsdrba/gmfss_union/weights/train_log_gmfss_union"
