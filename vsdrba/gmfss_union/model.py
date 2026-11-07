@@ -17,12 +17,49 @@ class GMFSS_UNION:
         weights="weights/train_log_gmfss_union",
         scale=1.0,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        trt=False,
     ):
         self.model = Model()
         self.model.load_model(weights, -1)
         self.model.device(device)
         self.model.eval()
         self.ifnet = IFNet(scale=scale).to(device).eval()
+
+        self.trt = bool(trt)
+        if self.trt:
+            try:
+                import torch_tensorrt  # noqa: F401 - registers the TensorRT backend
+            except ImportError as exc:
+                raise RuntimeError(
+                    "TensorRT was requested, but torch_tensorrt could not be imported. "
+                    "Install a Torch-TensorRT build compatible with this PyTorch version."
+                ) from exc
+
+            # Begin with the two convolution-dominant modules that have clean,
+            # tensor-only interfaces. Compilation is lazy: engines are built
+            # on the first VapourSynth frame with the actual padded dimensions.
+            trt_options = {
+                "enabled_precisions": {torch.float16, torch.float32},
+                "optimization_level": 3,
+                "min_block_size": 3,
+                "pass_through_build_failures": True,
+            }
+            self.model.feat_ext = torch.compile(
+                self.model.feat_ext,
+                backend="tensorrt",
+                dynamic=False,
+                options=trt_options,
+            )
+            self.model.fusionnet = torch.compile(
+                self.model.fusionnet,
+                backend="tensorrt",
+                dynamic=False,
+                options=trt_options,
+            )
+            print(
+                "GMFSS TensorRT enabled for FeatureNet and FusionNet; "
+                "engines will build lazily for the first input shape."
+            )
 
         # The original DRBA checkpoint also contains teacher/caltime training
         # modules. They are not part of inference, but every inference parameter
