@@ -276,6 +276,9 @@ class FeatureTransformer(nn.Module):
                              with_shift=True if attention_type == 'swin' and i % 2 == 1 else False,
                              )
             for i in range(num_layers)])
+        # Window masks depend only on the padded feature shape/device/dtype.
+        # Reuse them across the two GMFlow directions and subsequent frames.
+        self._attn_mask_cache = {}
 
         for p in self.parameters():
             if p.dim() > 1:
@@ -297,15 +300,22 @@ class FeatureTransformer(nn.Module):
             window_size_h = h // attn_num_splits
             window_size_w = w // attn_num_splits
 
-            # compute attn mask once
-            shifted_window_attn_mask = generate_shift_window_attn_mask(
-                input_resolution=(h, w),
-                window_size_h=window_size_h,
-                window_size_w=window_size_w,
-                shift_size_h=window_size_h // 2,
-                shift_size_w=window_size_w // 2,
-                device=feature0.device,
-            )  # [K*K, H/K*W/K, H/K*W/K]
+            # Cache the fixed-shape shifted-window mask across inference frames.
+            cache_key = (
+                h, w, attn_num_splits, feature0.device.type,
+                feature0.device.index, feature0.dtype,
+            )
+            shifted_window_attn_mask = self._attn_mask_cache.get(cache_key)
+            if shifted_window_attn_mask is None:
+                shifted_window_attn_mask = generate_shift_window_attn_mask(
+                    input_resolution=(h, w),
+                    window_size_h=window_size_h,
+                    window_size_w=window_size_w,
+                    shift_size_h=window_size_h // 2,
+                    shift_size_w=window_size_w // 2,
+                    device=feature0.device,
+                ).to(dtype=feature0.dtype)
+                self._attn_mask_cache[cache_key] = shifted_window_attn_mask
         else:
             shifted_window_attn_mask = None
 
