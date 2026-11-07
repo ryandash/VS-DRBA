@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 from fractions import Fraction
 from threading import Lock
 from pathlib import Path
@@ -15,28 +14,6 @@ import torch.nn.functional as F
 import vapoursynth as vs
 
 from .model import GMFSS_UNION
-
-
-class _RedirectNativeStdout:
-    """Temporarily send native-library stdout diagnostics to stderr.
-
-    vspipe reserves process stdout for the Y4M frame stream. TensorRT's C++
-    logger writes directly to file descriptor 1, bypassing Python's
-    redirect_stdout(), so redirect the descriptor while lazy engines build
-    and inference runs.
-    """
-
-    def __enter__(self):
-        sys.stdout.flush()
-        self._saved_stdout = os.dup(1)
-        os.dup2(2, 1)
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout.flush()
-        os.dup2(self._saved_stdout, 1)
-        os.close(self._saved_stdout)
-        return False
 
 
 def _frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor:
@@ -202,7 +179,7 @@ def drba_gmfss(
         if t == 0 or (sc and f[0].props.get("_SceneChangeNext", 0)):
             return f[0]
 
-        with inference_lock, _RedirectNativeStdout(), torch.cuda.stream(stream):
+        with inference_lock, torch.cuda.stream(stream):
             image0, image1, image2 = [
                 _frame_to_tensor(frame, device) for frame in f
             ]
