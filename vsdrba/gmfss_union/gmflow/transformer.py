@@ -15,6 +15,8 @@ def _scaled_dot_product_attention(q, k, v, attn_mask=None):
 
     scores = torch.matmul(q, k.permute(0, 2, 1)) / (q.size(-1) ** 0.5)
     if attn_mask is not None:
+        if attn_mask.dim() == 4:
+            attn_mask = attn_mask.squeeze(1)
         scores = scores + attn_mask
     return torch.matmul(torch.softmax(scores, dim=-1), v)
 
@@ -77,8 +79,6 @@ def single_head_split_window_attention(q, k, v,
     q = q.view(b, h, w, c)  # [B, H, W, C]
     k = k.view(b, h, w, c)
     v = v.view(b, h, w, c)
-
-    scale_factor = c ** 0.5
 
     if with_shift:
         assert attn_mask is not None  # compute once
