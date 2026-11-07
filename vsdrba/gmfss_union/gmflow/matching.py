@@ -76,7 +76,7 @@ def local_correlation_softmax(feature0, feature1, local_radius,
 
     # mask invalid locations
     # corr[~valid] = -1e9 if feature0.dtype == torch.float32 else -1e4
-    corr[~valid] = -1e4
+    corr = corr.masked_fill(~valid, -1e4)
 
     prob = F.softmax(corr, -1)  # [B, H*W, (2R+1)^2]
 
