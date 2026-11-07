@@ -62,9 +62,9 @@ class GMFSS_UNION:
                 "engines will build lazily for the first input shape."
             )
 
-        # The original DRBA checkpoint also contains teacher/caltime training
-        # modules. They are not part of inference, but every inference parameter
-        # must be present and load successfully.
+        # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
+        # 4 feature channels (the 4.26 Heavy encoder emits 16), so its weights
+        # are architecturally incompatible with the old GMFSS heavy checkpoint.
         if rife_weights is None:
             raise ValueError(
                 "A RIFE 4.25 checkpoint path is required. Download it with "
@@ -74,7 +74,7 @@ class GMFSS_UNION:
         load_result = self.ifnet.load_state_dict(rife_state, strict=False)
         if load_result.missing_keys:
             raise RuntimeError(
-                "Missing required RIFE checkpoint parameters: "
+                "Missing required RIFE 4.25 checkpoint parameters: "
                 + ", ".join(load_result.missing_keys)
             )
         unexpected_other = [
@@ -83,7 +83,7 @@ class GMFSS_UNION:
         ]
         if unexpected_other:
             raise RuntimeError(
-                "Unexpected RIFE checkpoint parameters: "
+                "Unexpected RIFE 4.25 checkpoint parameters: "
                 + ", ".join(unexpected_other)
             )
         if load_result.unexpected_keys:
