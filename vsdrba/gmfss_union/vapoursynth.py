@@ -40,6 +40,7 @@ def drba_gmfss(
     clip: vs.VideoNode,
     device_index: int = 0,
     weights: str | os.PathLike | None = None,
+    rife_weights: str | os.PathLike | None = None,
     factor_num: int = 2,
     factor_den: int = 1,
     fps_num: int | None = None,
@@ -107,10 +108,21 @@ def drba_gmfss(
     weights_path = Path(weights).expanduser() if weights is not None else package_weights
     if not weights_path.is_dir():
         raise vs.Error(f"gmfss: checkpoint directory does not exist: {weights_path}")
-    required = ("flownet.pkl", "metric.pkl", "feat.pkl", "fusionnet.pkl", "rife.pkl")
+    required = ("flownet.pkl", "metric.pkl", "feat.pkl", "fusionnet.pkl")
     missing = [name for name in required if not (weights_path / name).is_file()]
     if missing:
         raise vs.Error(f"gmfss: missing checkpoint files in {weights_path}: {', '.join(missing)}")
+
+    package_rife_weights = Path(__file__).resolve().parents[1] / "models" / "flownet_v4.25.pkl"
+    rife_weights_path = (
+        Path(rife_weights).expanduser() if rife_weights is not None else package_rife_weights
+    )
+    if not rife_weights_path.is_file():
+        raise vs.Error(
+            "gmfss: RIFE 4.25 checkpoint not found at "
+            f"{rife_weights_path}. Run python -m vsdrba to download it, "
+            "or pass rife_weights=... explicitly."
+        )
 
     if sc and sc_threshold is not None:
         scene_clip = clip.resize.Bicubic(format=vs.GRAY8, matrix_s="709").misc.SCDetect(sc_threshold)
@@ -131,7 +143,8 @@ def drba_gmfss(
     torch.set_float32_matmul_precision("high")
     try:
         model = GMFSS_UNION(
-            weights=str(weights_path), scale=scale, device=device, trt=trt
+            weights=str(weights_path), scale=scale, device=device, trt=trt,
+            rife_weights=str(rife_weights_path),
         )
     except Exception as exc:
         if trt:
