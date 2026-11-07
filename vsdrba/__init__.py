@@ -258,8 +258,10 @@ def drba_rife(
         cache_dir = os.path.realpath(trt_cache_dir)
         os.makedirs(cache_dir, exist_ok=True)
 
+        checkpoint_stat = os.stat(os.path.join(model_dir, model_name))
         cache_name = (
             f"DRBA_{model_name}"
+            + f"_weights-{checkpoint_stat.st_size}-{checkpoint_stat.st_mtime_ns}"
             + f"_{dimensions}"
             + f"_{'fp16' if fp16 else 'fp32'}"
             + f"_scale-{scale}"
