@@ -1,3 +1,4 @@
+import torch
 from .softsplat import softsplat as warp
 from .utils import distance_calculator
 
@@ -92,8 +93,8 @@ def calc_drm_rife(t, flow10, flow12, linear=False):
     gap_t1_t01 = mask_t1_t01 < 0.999
     gap_t1_t12 = mask_t1_t12 < 0.999
 
-    drm_t1_t01[gap_t1_t01] = drm_t1_unaligned[gap_t1_t01]
-    drm_t1_t12[gap_t1_t12] = drm_t0_unaligned[gap_t1_t12]
+    drm_t1_t01 = torch.where(gap_t1_t01, drm_t1_unaligned, drm_t1_t01)
+    drm_t1_t12 = torch.where(gap_t1_t12, drm_t0_unaligned, drm_t1_t12)
 
     return {
         "drm_t1_t01": drm_t1_t01,
@@ -138,8 +139,8 @@ def calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear=False):
     gap_2t_t12 = warped_ones_mask2t_t12 < 0.999
 
     # Fill the holes in the warped drm maps with the inverse of the original drm maps
-    drm0t_t01[gap_0t_t01] = drm0t_t01_unaligned[gap_0t_t01]
-    drm2t_t12[gap_2t_t12] = drm2t_t12_unaligned[gap_2t_t12]
+    drm0t_t01 = torch.where(gap_0t_t01, drm0t_t01_unaligned, drm0t_t01)
+    drm2t_t12 = torch.where(gap_2t_t12, drm2t_t12_unaligned, drm2t_t12)
 
     return {
         "drm0t_t01": drm0t_t01,
@@ -179,8 +180,8 @@ def calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear=False)
     gap_t1_t01 = mask_t1_t01 < 0.999
     gap_t1_t12 = mask_t1_t12 < 0.999
 
-    drm_t1_t01[gap_t1_t01] = drm_t1_unaligned[gap_t1_t01]
-    drm_t1_t12[gap_t1_t12] = drm_t0_unaligned[gap_t1_t12]
+    drm_t1_t01 = torch.where(gap_t1_t01, drm_t1_unaligned, drm_t1_t01)
+    drm_t1_t12 = torch.where(gap_t1_t12, drm_t0_unaligned, drm_t1_t12)
 
     # why use drm0t1 not drm1t0, because rife use backward warp not forward warp.
     return {
