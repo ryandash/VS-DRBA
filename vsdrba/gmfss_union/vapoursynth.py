@@ -39,9 +39,6 @@ def _tensor_to_frame(
             f"gmfss: model returned tensor shape {tuple(tensor.shape)}; "
             f"expected {expected_shape}"
         )
-    if not torch.isfinite(tensor).all().item():
-        raise vs.Error("gmfss: TensorRT/PyTorch produced NaN or infinite output values")
-
     # Transfer the complete output once. Per-plane asynchronous copies followed
     # by .numpy() caused repeated host synchronization on every output frame.
     cpu_tensor = tensor.to(device="cpu", non_blocking=False).contiguous()
