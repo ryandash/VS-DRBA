@@ -60,7 +60,9 @@ class GMFSS_UNION:
                 "enabled_precisions": {torch.float16, torch.float32},
                 "optimization_level": 3,
                 "min_block_size": 3,
-                "pass_through_build_failures": True,
+                # Fall back to eager PyTorch for partitions whose mixed-precision
+                # casts cannot be implemented by this TensorRT build.
+                "pass_through_build_failures": False,
             }
             self.model.feat_ext = torch.compile(
                 self.model.feat_ext,
@@ -108,7 +110,9 @@ class GMFSS_UNION:
                 "enabled_precisions": {torch.float16, torch.float32},
                 "optimization_level": 3,
                 "min_block_size": 3,
-                "pass_through_build_failures": True,
+                # Fall back to eager PyTorch for partitions whose mixed-precision
+                # casts cannot be implemented by this TensorRT build.
+                "pass_through_build_failures": False,
             }
             gmflow = self.model.flownet
             gmflow.backbone = torch.compile(
@@ -167,7 +171,9 @@ class GMFSS_UNION:
                 "enabled_precisions": {torch.float16, torch.float32},
                 "optimization_level": 3,
                 "min_block_size": 3,
-                "pass_through_build_failures": True,
+                # Fall back to eager PyTorch for partitions whose mixed-precision
+                # casts cannot be implemented by this TensorRT build.
+                "pass_through_build_failures": False,
             }
             self.ifnet.encode = torch.compile(
                 self.ifnet.encode, backend="torch_tensorrt", dynamic=False,
