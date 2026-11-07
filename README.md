@@ -106,7 +106,7 @@ python -m pip check
 Run the repository smoke test to verify that Torch-TensorRT can actually compile and execute a small FP16 convolution through the `torch.compile` backend (an import-only check does not prove that engine compilation works):
 
 ```bat
-python scripts\verify_tensorrt.py
+python -m vsdrba.verify_tensorrt
 ```
 
 If the smoke test fails, keep `trt=False` / `gmflow_trt=False` and provide the complete traceback. The eager PyTorch path does not require TensorRT. These commands are specific to the stated CUDA 12.8 environment; do not apply them to a CUDA 13 PyTorch installation.
