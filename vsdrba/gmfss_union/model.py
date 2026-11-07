@@ -95,7 +95,7 @@ class GMFSS_UNION:
             )
             print(
                 "GMFSS TensorRT enabled for FeatureNet, MetricNet, and FusionNet; "
-                "engines will build lazily for the first input shape."
+                "engines will build lazily for the first input shape.",
                 file=sys.stderr,
             )
 
