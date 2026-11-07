@@ -50,9 +50,9 @@ See `__init__.py` for the description of the parameters.
 
 ## Model support and GMFSS Union
 
-This branch intentionally retains only the RIFE 4.25, 4.26, and 4.26 Heavy implementations. RIFE 4.26 Heavy is also the auxiliary interpolation network used by the original DRBA GMFSS Union model; it must remain available independently of the public RIFE selection.
+This branch intentionally retains only the RIFE 4.25, 4.26, and 4.26 Heavy implementations. GMFSS Union uses the RIFE 4.25 architecture as its auxiliary interpolation network, independently of the public RIFE model selector.
 
-GMFSS Union is being ported as a separate pipeline rather than as another RIFE selector. Its first integration stages are GMFlow, FeatureNet, MetricNet, DRM, SoftSplat, the RIFE 4.26 Heavy auxiliary network, and FusionNet. TensorRT compilation will be introduced per network, with PyTorch/CUDA warping and DRM kept outside TensorRT until correctness is established.
+GMFSS Union is being ported as a separate pipeline rather than as another RIFE selector. Its first integration stages are GMFlow, FeatureNet, MetricNet, DRM, SoftSplat, the RIFE 4.25 auxiliary network, and FusionNet. TensorRT compilation will be introduced per network, with PyTorch/CUDA warping and DRM kept outside TensorRT until correctness is established.
 
 Target validation hardware: NVIDIA GeForce RTX 5070 Ti (Blackwell). Initial TensorRT validation should use fixed spatial dimensions and FP16, with engine cache keys including GPU, TensorRT/PyTorch versions, resolution, and precision.
 
