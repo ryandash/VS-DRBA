@@ -17,11 +17,13 @@ clip = drba_gmfss(
 )
 ```
 
+Set `trt=True` to enable the experimental TensorRT path for FeatureNet and FusionNet. Their engines compile lazily on the first interpolated frame and are specialized to the padded clip dimensions. The first frame can therefore take substantially longer while engines are built. GMFlow, MetricNet, auxiliary RIFE, DRM, and SoftSplat remain on eager PyTorch/CUDA. The initial implementation allows FP16 and FP32 TensorRT precisions; it does not promise that every operation in either network becomes a TensorRT engine. Keep `trt=False` as the baseline and fallback.
+
 The input must be a constant-format RGBH or RGBS VapourSynth clip, contain at least two frames, and have CUDA available. The default checkpoint directory is `vsdrba/gmfss_union/weights/train_log_gmfss_union`; pass `weights=...` to override it. `factor_num/factor_den` controls the output frame-rate multiplier. Alternatively, specify both `fps_num` and `fps_den` to request an absolute output frame rate.
 
 `sc=True` uses existing `_SceneChangeNext` frame properties. Supply `sc_threshold` to run VapourSynth's `misc.SCDetect` first. `linear=True` selects the linear DRM variant.
 
-TensorRT is not implemented for this clip path yet. `trt=True` raises an explicit error; use `trt=False` for eager PyTorch/CUDA inference. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
+TensorRT is opt-in and currently targets FeatureNet and FusionNet only. `trt=False` retains the original eager PyTorch/CUDA execution path. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
 
 ## Inference graph
 
@@ -47,4 +49,6 @@ The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.26 
 - [x] Add a separate VapourSynth clip adapter with rational frame-rate scheduling and optional scene-change handling.
 - [ ] Validate clip output against real consecutive frames and inspect visual quality.
 - [ ] Validate 1080p and 4K performance, VRAM, and frame scheduling.
-- [ ] Add eager numerical parity tests and per-network TensorRT export tests.
+- [ ] Compare TensorRT FeatureNet/FusionNet outputs against eager outputs on real 1080p and 4K clips.
+- [ ] Measure steady-state throughput and peak VRAM with TensorRT enabled versus eager execution.
+- [ ] Expand TensorRT coverage to MetricNet, GMFlow, and auxiliary RIFE only after component-level parity tests.
