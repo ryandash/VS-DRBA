@@ -71,15 +71,13 @@ def drba_gmfss(
     sc_threshold: float | None = None,
     linear: bool = False,
     trt: bool = False,
-    gmflow_trt: bool = False,
-    rife_trt: bool = False,
     profile_dir: str | os.PathLike | None = None,
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
-    With trt=True, FeatureNet, MetricNet, and FusionNet use Torch-TensorRT.
-    Set gmflow_trt=True for GMFlow's CNN backbone and rife_trt=True for the
-    RIFE 4.25 encoder and IFBlocks. Unsupported operations remain eager.
+    With trt=True, selected convolutional modules use TensorRT-RTX. DRM,
+    SoftSplat, GMFlow transformer/matching, and VapourSynth orchestration remain
+    outside the engine boundary by design. RTX import/build failures are fatal.
     Set profile_dir to write one Chrome trace JSON per processed output frame.
 
     The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
@@ -155,12 +153,11 @@ def drba_gmfss(
     try:
         model = GMFSS_UNION(
             weights=str(weights_path), scale=scale, device=device, trt=trt,
-            gmflow_trt=gmflow_trt, rife_trt=rife_trt,
             rife_weights=str(rife_weights_path),
         )
     except Exception as exc:
-        if trt or gmflow_trt or rife_trt:
-            raise vs.Error(f"gmfss: TensorRT initialization failed: {exc}") from exc
+        if trt:
+            raise vs.Error(f"gmfss: TensorRT-RTX initialization failed: {exc}") from exc
         raise
     profile_path = Path(profile_dir).expanduser() if profile_dir is not None else None
     if profile_path is not None:
