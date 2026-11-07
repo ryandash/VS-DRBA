@@ -74,4 +74,4 @@ clip = drba_gmfss(
 )
 ```
 
-The GMFSS clip path currently requires RGBH or RGBS input and CUDA. It uses eager PyTorch; TensorRT is not yet implemented for GMFSS and `trt=True` is rejected. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and current validation limits.
+The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` experimentally compiles FeatureNet and FusionNet through Torch-TensorRT; GMFlow, MetricNet, auxiliary RIFE, DRM, and SoftSplat remain eager PyTorch/CUDA. The first interpolated frame triggers lazy engine compilation for the padded clip dimensions. Keep `trt=False` for the baseline path. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
