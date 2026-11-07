@@ -271,11 +271,14 @@ class GMFSS_UNION:
             )
         else:
             reuseI1I0 = reuse
+            # Keep the triplet batch dimension stable for the fixed-shape RTX engines.
+            frame_features = self.model.extract_frame_features(I1, I2, I2)
             gmflow_features = self.model.extract_gmflow_features(
-                I1, I2, scale=self.scale
+                I1, I2, I2, scale=self.scale
             )
             reuseI1I2 = self.model.reuse(
                 I1, I2, self.scale, feat_ext0=reuseI1I0[4],
+                feat_ext1=frame_features[1],
                 gmflow_features=(gmflow_features[0], gmflow_features[1]),
             )
 
