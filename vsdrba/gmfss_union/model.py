@@ -50,16 +50,15 @@ class GMFSS_UNION:
         if self.trt:
             try:
                 import torch_tensorrt  # noqa: F401 - registers the TensorRT backend
-            # Torch-TensorRT's native logger writes warnings to process stdout
-            # on Windows, corrupting vspipe's Y4M stream. Route the effective
-            # threshold through its Python/C++ logging bridge before any lazy
-            # engine compilation begins.
-            torch_tensorrt.logging.set_level(logging.ERROR)
             except ImportError as exc:
                 raise RuntimeError(
                     "TensorRT was requested, but torch_tensorrt could not be imported. "
                     "Install a Torch-TensorRT build compatible with this PyTorch version."
                 ) from exc
+
+            # Keep TensorRT's native warning logger off stdout: vspipe reserves
+            # stdout for its Y4M stream. Suppress warnings before lazy builds.
+            torch_tensorrt.logging.set_level(logging.ERROR)
 
             # Keep TensorRT partitions internally consistent with the FP16
             # autocast inference path. Exporting FP32 weights with inserted
