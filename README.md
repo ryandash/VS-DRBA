@@ -91,7 +91,10 @@ In the portable Python environment, remove the generic/CUDA 13 distributions whi
 
 ```bat
 python -m pip uninstall -y tensorrt tensorrt-cu13 tensorrt-cu13-bindings tensorrt-cu13-libs
+python -m pip install --force-reinstall --no-deps --extra-index-url https://pypi.nvidia.com "tensorrt-cu12==10.15.1.29" "tensorrt-cu12-bindings==10.15.1.29" "tensorrt-cu12-libs==10.15.1.29"
 ```
+
+Reinstalling the CUDA 12 packages after removing CUDA 13 is intentional: the CUDA 12 and CUDA 13 binding distributions can install files into the same Python package location. Reinstalling CUDA 12 restores the correct binding files.
 
 Then verify the CUDA 12 runtime is still importable:
 
