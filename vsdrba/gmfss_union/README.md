@@ -32,14 +32,14 @@ TensorRT is opt-in and currently targets FeatureNet and FusionNet only. `trt=Fal
 3. FeatureNet extracts multiscale features; MetricNet estimates per-direction metric maps.
 4. GMFSS DRM forms spatial timestep maps.
 5. SoftSplat performs CUDA/PyTorch warping and hole handling.
-6. RIFE 4.26 Heavy supplies the auxiliary intermediate prediction.
+6. RIFE 4.25 supplies the auxiliary intermediate prediction.
 7. FusionNet combines warped RGB, the auxiliary prediction, and aligned multiscale features.
 
-The RIFE auxiliary checkpoint includes `teacher.*` and `caltime.*` training-only parameters. Those keys are intentionally ignored; all inference parameters must load, and any other unexpected key causes initialization to fail.
+The auxiliary network uses the standard RIFE 4.25 checkpoint `flownet_v4.25.pkl`, downloaded by `python -m vsdrba` into `vsdrba/models/`. Pass `rife_weights=...` to `drba_gmfss()` to select another compatible 4.25 checkpoint. The old GMFSS `rife.pkl` heavy checkpoint is no longer used.
 
 ## TensorRT boundary
 
-The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.26 Heavy, and FusionNet independently. DRM, SoftSplat, masks, and VapourSynth frame orchestration remain outside TensorRT until eager inference and numerical parity are established. The initial hardware target is the GeForce RTX 5070 Ti (Blackwell), batch 1, FP16, fixed spatial shapes.
+The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.25, and FusionNet independently. DRM, SoftSplat, masks, and VapourSynth frame orchestration remain outside TensorRT until eager inference and numerical parity are established. The initial hardware target is the GeForce RTX 5070 Ti (Blackwell), batch 1, FP16, fixed spatial shapes.
 
 ## Validation status
 
@@ -52,3 +52,32 @@ The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.26 
 - [ ] Compare TensorRT FeatureNet/FusionNet outputs against eager outputs on real 1080p and 4K clips.
 - [ ] Measure steady-state throughput and peak VRAM with TensorRT enabled versus eager execution.
 - [ ] Expand TensorRT coverage to MetricNet, GMFlow, and auxiliary RIFE only after component-level parity tests.
+
+### TensorRT expansion strategy
+
+Do not convert every remaining module at once. Use the traces to rank GMFlow, MetricNet, auxiliary RIFE, DRM, and SoftSplat by CUDA time. FeatureNet and FusionNet are passed through Torch-TensorRT, but that does not imply every operator is compiled: inspect the trace for fallback PyTorch operators and TensorRT engine execution. If GMFlow or MetricNet dominates, evaluate it as an isolated export target next; validate output parity on representative frames before enabling it in the full pipeline. DRM and SoftSplat include warping semantics and custom tensor operations, so keep them as explicit separate targets until numerical parity and performance are demonstrated.
+
+
+## RIFE auxiliary model selection
+
+GMFSS Union now uses the RIFE 4.25 architecture for its auxiliary intermediate prediction network. It no longer imports RIFE 4.26 Heavy or loads the old `rife.pkl` file from the GMFSS checkpoint directory.
+
+Download the standard RIFE checkpoints (including `flownet_v4.25.pkl`) with:
+
+```bash
+python -m vsdrba
+```
+
+The GMFSS Union adapter looks for the 4.25 checkpoint at `vsdrba/models/flownet_v4.25.pkl`. You can supply a compatible checkpoint at another location:
+
+```python
+clip = drba_gmfss(
+    clip,
+    weights=r".../train_log_gmfss_union",
+    rife_weights=r".../flownet_v4.25.pkl",
+    factor_num=2,
+    factor_den=1,
+)
+```
+
+The GMFSS checkpoint directory still needs `flownet.pkl`, `metric.pkl`, `feat.pkl`, and `fusionnet.pkl`; `rife.pkl` is no longer required. The 4.25 model has a smaller feature encoding (4 channels) than 4.26 Heavy (16 channels), so the two checkpoint formats are not interchangeable. Use weights trained for the 4.25 architecture; do not point `rife_weights` at the old heavy `rife.pkl`.

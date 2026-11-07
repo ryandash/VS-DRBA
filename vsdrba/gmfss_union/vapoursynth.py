@@ -40,6 +40,7 @@ def drba_gmfss(
     clip: vs.VideoNode,
     device_index: int = 0,
     weights: str | os.PathLike | None = None,
+    rife_weights: str | os.PathLike | None = None,
     factor_num: int = 2,
     factor_den: int = 1,
     fps_num: int | None = None,
@@ -54,7 +55,10 @@ def drba_gmfss(
 
     With trt=True, FeatureNet and FusionNet are compiled lazily by
     Torch-TensorRT for the clip's fixed padded dimensions. GMFlow, MetricNet,
-    auxiliary RIFE, DRM, and SoftSplat remain on the eager PyTorch path.
+    auxiliary RIFE 4.25, DRM, and SoftSplat remain on the eager PyTorch path.
+
+    The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
+    from vsdrba/models by default. Use rife_weights to override its location.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("gmfss: input is not a VapourSynth clip")
@@ -83,7 +87,6 @@ def drba_gmfss(
         factor_num, factor_den = factor.as_integer_ratio()
     if factor_num <= factor_den:
         raise vs.Error("gmfss: target frame rate must be higher than source frame rate")
-
     package_weights = Path(__file__).resolve().parent / "weights" / "train_log_gmfss_union"
     if not package_weights.is_dir():
         # Source checkout layout keeps the checkpoints at repository-root weights/.
@@ -91,10 +94,21 @@ def drba_gmfss(
     weights_path = Path(weights).expanduser() if weights is not None else package_weights
     if not weights_path.is_dir():
         raise vs.Error(f"gmfss: checkpoint directory does not exist: {weights_path}")
-    required = ("flownet.pkl", "metric.pkl", "feat.pkl", "fusionnet.pkl", "rife.pkl")
+    required = ("flownet.pkl", "metric.pkl", "feat.pkl", "fusionnet.pkl")
     missing = [name for name in required if not (weights_path / name).is_file()]
     if missing:
         raise vs.Error(f"gmfss: missing checkpoint files in {weights_path}: {', '.join(missing)}")
+
+    package_rife_weights = Path(__file__).resolve().parents[1] / "models" / "flownet_v4.25.pkl"
+    rife_weights_path = (
+        Path(rife_weights).expanduser() if rife_weights is not None else package_rife_weights
+    )
+    if not rife_weights_path.is_file():
+        raise vs.Error(
+            "gmfss: RIFE 4.25 checkpoint not found at "
+            f"{rife_weights_path}. Run python -m vsdrba to download it, "
+            "or pass rife_weights=... explicitly."
+        )
 
     if sc and sc_threshold is not None:
         scene_clip = clip.resize.Bicubic(format=vs.GRAY8, matrix_s="709").misc.SCDetect(sc_threshold)
@@ -115,7 +129,8 @@ def drba_gmfss(
     torch.set_float32_matmul_precision("high")
     try:
         model = GMFSS_UNION(
-            weights=str(weights_path), scale=scale, device=device, trt=trt
+            weights=str(weights_path), scale=scale, device=device, trt=trt,
+            rife_weights=str(rife_weights_path),
         )
     except Exception as exc:
         if trt:

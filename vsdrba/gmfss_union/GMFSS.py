@@ -85,17 +85,17 @@ class Model:
         I1t = warp(img0, F1t, Z1t, strMode="soft")
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
         I2t = warp(img1, F2t, Z2t, strMode="soft")
-
+    
         feat1t1 = warp(feat11, F1t, Z1t, strMode="soft")
         feat2t1 = warp(feat21, F2t, Z2t, strMode="soft")
-
+    
         F1td = F.interpolate(F1t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
         Z1d = F.interpolate(Z1t, scale_factor=0.5, mode="bilinear", align_corners=False)
         feat1t2 = warp(feat12, F1td, Z1d, strMode="soft")
         F2td = F.interpolate(F2t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
         Z2d = F.interpolate(Z2t, scale_factor=0.5, mode="bilinear", align_corners=False)
         feat2t2 = warp(feat22, F2td, Z2d, strMode="soft")
-
+    
         F1tdd = F.interpolate(F1t, scale_factor=0.25, mode="bilinear", align_corners=False) * 0.25
         Z1dd = F.interpolate(Z1t, scale_factor=0.25, mode="bilinear", align_corners=False)
         feat1t3 = warp(feat13, F1tdd, Z1dd, strMode="soft")
