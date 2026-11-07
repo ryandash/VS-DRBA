@@ -52,14 +52,33 @@ class GMFSS_UNION:
         self.scale = scale
 
     def _rife_inference(self, img0, img1, timestep):
-        """Adapt GMFSS to VS-DRBA's optimized RIFE 4.26 Heavy forward API."""
+        """Run the auxiliary RIFE network on dimensions safe for its five scales.
+
+        The RIFE Heavy IFBlocks use two stride-2 convolutions at each pyramid
+        level. Padding the half-resolution inputs to multiples of 64 prevents
+        odd intermediate feature sizes from rounding up and producing a flow
+        tensor larger than the corresponding warp grid.
+        """
+        original_height, original_width = img0.shape[-2:]
+        padded_height = ((original_height + 63) // 64) * 64
+        padded_width = ((original_width + 63) // 64) * 64
+        pad = (0, padded_width - original_width, 0, padded_height - original_height)
+
+        if any(pad):
+            img0 = F.pad(img0, pad, mode="replicate")
+            img1 = F.pad(img1, pad, mode="replicate")
+
         if not torch.is_tensor(timestep):
             timestep = img0[:, :1].new_full(
                 (img0.shape[0], 1, img0.shape[2], img0.shape[3]), float(timestep)
             )
+        elif any(pad):
+            timestep = F.pad(timestep, pad, mode="replicate")
+
         feat0 = self.ifnet.encode(img0)
         feat1 = self.ifnet.encode(img1)
-        return self.ifnet(img0, img1, timestep, feat0, feat1)
+        prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
+        return prediction[:, :, :original_height, :original_width]
 
     @torch.inference_mode()
     @torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu")
