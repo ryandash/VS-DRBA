@@ -62,7 +62,7 @@ clip = drba_gmfss(
     factor_den=1,
     scale=1.0,
     sc=True,
-    trt=False,
+    trt=True,
 )
 ```
 
