@@ -2,7 +2,6 @@
 
 import os
 import sys
-import warnings
 
 import torch
 import torch.nn.functional as F
@@ -20,8 +19,6 @@ class GMFSS_UNION:
         scale=1.0,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         trt=False,
-        gmflow_trt=False,
-        rife_trt=False,
         rife_weights=None,
     ):
         self.model = Model()
@@ -30,108 +27,66 @@ class GMFSS_UNION:
         self.model.eval()
         self.ifnet = IFNet(scale=scale).to(device).eval()
 
-        # TensorRT remains optional for the original eager PyTorch path.
-        # If the active VapourSynth interpreter cannot import the backend, run
-        # all requested components eagerly rather than failing clip evaluation.
-        if trt or gmflow_trt or rife_trt:
-            try:
-                import tensorrt  # noqa: F401
-                import torch_tensorrt  # noqa: F401
-            except Exception as exc:
-                warnings.warn(
-                    f"GMFSS Union: TensorRT is unavailable ({exc}); disabling TensorRT acceleration and using eager PyTorch.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                trt = gmflow_trt = rife_trt = False
-
         self.trt = bool(trt)
         if self.trt:
+            # TensorRT-RTX is a separate runtime from standard TensorRT.
+            # Import failures are fatal: never silently disable acceleration.
             try:
-                import torch_tensorrt  # noqa: F401 - registers the TensorRT backend
-            except ImportError as exc:
+                import tensorrt_rtx
+                import torch_tensorrt
+            except Exception as exc:
                 raise RuntimeError(
-                    "TensorRT was requested, but torch_tensorrt could not be imported. "
-                    "Install a Torch-TensorRT build compatible with this PyTorch version."
+                    "TensorRT-RTX was requested but its runtime could not be imported. "
+                    "Install the matching torch-tensorrt-rtx and tensorrt-rtx packages."
                 ) from exc
 
-            # Keep TensorRT partitions internally consistent with the FP16
-            # autocast inference path. Exporting FP32 weights with inserted
-            # FP16 casts can trigger unsupported mixed-precision convolution
-            # tactics in TensorRT 10.15 on some GPUs.
             self.model.feat_ext.half()
             self.model.metricnet.half()
             self.model.fusionnet.half()
+            self.ifnet.half()
 
-            # Compile the convolution-dominant GMFSS modules independently.
-            # Use one explicit precision; unsupported operations stay eager.
-            trt_options = {
+            # Compile only deliberately selected submodules. SoftSplat, DRM,
+            # GMFlow transformer/matching, and RIFE warping remain outside the
+            # engine boundary by design. Build failures in an RTX partition
+            # raise instead of being silently passed through to eager execution.
+            rtx_options = {
                 "enabled_precisions": {torch.float16},
                 "optimization_level": 3,
-                "min_block_size": 3,
-                # Fall back to eager PyTorch for partitions whose mixed-precision
-                # casts cannot be implemented by this TensorRT build.
-                "pass_through_build_failures": False,
+                "min_block_size": 1,
+                "pass_through_build_failures": True,
             }
-            self.model.feat_ext = torch.compile(
-                self.model.feat_ext,
-                backend="torch_tensorrt",
-                dynamic=False,
-                options=trt_options,
-            )
-            self.model.fusionnet = torch.compile(
-                self.model.fusionnet,
-                backend="torch_tensorrt",
-                dynamic=False,
-                options=trt_options,
-            )
-            # Keep grid_sample and forward/backward consistency eager; only
-            # compile MetricNet's convolution-only feature-to-metric head.
-            self.model.metricnet.forward_conv = torch.compile(
-                self.model.metricnet.forward_conv,
-                backend="torch_tensorrt",
-                dynamic=False,
-                options=trt_options,
-            )
-            print(
-                "GMFSS TensorRT enabled for FeatureNet, MetricNet, and FusionNet; "
-                "engines will build lazily for the first input shape.",
-                file=sys.stderr,
-            )
 
-        self.gmflow_trt = bool(gmflow_trt)
-        if self.gmflow_trt:
-            if not self.trt:
+            def compile_rtx(module, label):
                 try:
-                    import torch_tensorrt  # noqa: F401
-                except ImportError as exc:
+                    return torch.compile(
+                        module,
+                        backend="tensorrt",
+                        dynamic=False,
+                        options=rtx_options,
+                    )
+                except Exception as exc:
                     raise RuntimeError(
-                        "GMFlow TensorRT was requested, but torch_tensorrt could not be imported."
+                        f"TensorRT-RTX setup failed while preparing {label}: {exc}"
                     ) from exc
 
-            # Only compile GMFlow's convolutional feature backbone for now.
-            # The transformer contains reshape/view operations over partitioned
-            # attention windows; Torch-TensorRT's AOT fake-tensor export cannot
-            # currently represent some of those non-contiguous layouts (see
-            # PyTorch/Torch-TensorRT view/stride export failure). Keep the
-            # transformer, matching, flow attention, and upsampler eager until
-            # each has an independently validated export path.
-            gmflow_options = {
-                "enabled_precisions": {torch.float16},
-                "optimization_level": 3,
-                "min_block_size": 3,
-                # Fall back to eager PyTorch for partitions whose mixed-precision
-                # casts cannot be implemented by this TensorRT build.
-                "pass_through_build_failures": False,
-            }
-            gmflow = self.model.flownet
-            gmflow.backbone = torch.compile(
-                gmflow.backbone, backend="torch_tensorrt", dynamic=False,
-                options=gmflow_options,
+            self.model.feat_ext = compile_rtx(self.model.feat_ext, "FeatureNet")
+            self.model.fusionnet = compile_rtx(self.model.fusionnet, "FusionNet")
+            self.model.metricnet.forward_conv = compile_rtx(
+                self.model.metricnet.forward_conv, "MetricNet convolution head"
             )
+            self.model.flownet.backbone = compile_rtx(
+                self.model.flownet.backbone, "GMFlow CNN backbone"
+            )
+            self.ifnet.encode = compile_rtx(self.ifnet.encode, "RIFE encoder")
+            for name in ("block0", "block1", "block2", "block3", "block4"):
+                block_module = getattr(self.ifnet, name, None)
+                if block_module is not None:
+                    setattr(self.ifnet, name, compile_rtx(block_module, f"RIFE {name}"))
+
             print(
-                "Experimental GMFlow TensorRT enabled for the CNN backbone only; "
-                "transformer, matching, attention, and upsampling remain eager.",
+                f"TensorRT-RTX {tensorrt_rtx.__version__} enabled for FeatureNet, "
+                "MetricNet convolution head, FusionNet, GMFlow CNN backbone, "
+                "and RIFE encoder/IFBlocks. Engines compile on first use.",
                 file=sys.stderr,
             )
 
@@ -163,47 +118,6 @@ class GMFSS_UNION:
             print(
                 "RIFE checkpoint loaded; ignored "
                 f"{len(load_result.unexpected_keys)} training-only teacher/caltime parameters.",
-                file=sys.stderr,
-            )
-
-        self.rife_trt = bool(rife_trt)
-        if self.rife_trt:
-            if not self.trt and not self.gmflow_trt:
-                try:
-                    import torch_tensorrt  # noqa: F401
-                except ImportError as exc:
-                    raise RuntimeError(
-                        "RIFE TensorRT was requested, but torch_tensorrt could not be imported."
-                    ) from exc
-
-            # Compile the convolution-dominant RIFE encoder and IFBlocks as
-            # separate fixed-shape modules. Warping and pyramid orchestration
-            # remain in eager PyTorch.
-            rife_options = {
-                "enabled_precisions": {torch.float16},
-                "optimization_level": 3,
-                "min_block_size": 3,
-                # Fall back to eager PyTorch for partitions whose mixed-precision
-                # casts cannot be implemented by this TensorRT build.
-                "pass_through_build_failures": False,
-            }
-            self.ifnet.encode = torch.compile(
-                self.ifnet.encode, backend="torch_tensorrt", dynamic=False,
-                options=rife_options,
-            )
-            for name in ("block0", "block1", "block2", "block3", "block4"):
-                block = getattr(self.ifnet, name, None)
-                if block is not None:
-                    setattr(
-                        self.ifnet, name,
-                        torch.compile(
-                            block, backend="torch_tensorrt", dynamic=False,
-                            options=rife_options,
-                        ),
-                    )
-            print(
-                "Experimental RIFE TensorRT enabled for the encoder and IFBlocks; "
-                "engines will build lazily for the fixed pyramid shapes.",
                 file=sys.stderr,
             )
 
