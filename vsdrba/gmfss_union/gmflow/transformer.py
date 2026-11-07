@@ -376,10 +376,7 @@ class FeatureFlowAttention(nn.Module):
 
         value = flow.view(b, flow.size(1), h * w).permute(0, 2, 1)  # [B, H*W, 2]
 
-        scores = torch.matmul(query, key.permute(0, 2, 1)) / (c ** 0.5)  # [B, H*W, H*W]
-        prob = torch.softmax(scores, dim=-1)
-
-        out = torch.matmul(prob, value)  # [B, H*W, 2]
+        out = _scaled_dot_product_attention(query, key, value)  # [B, H*W, 2]
         out = out.view(b, h, w, value.size(-1)).permute(0, 3, 1, 2)  # [B, 2, H, W]
 
         return out
