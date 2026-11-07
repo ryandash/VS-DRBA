@@ -76,13 +76,17 @@ class Model:
 
     def reuse(self, img0, img1, scale, feat_ext0=None, feat_ext1=None, gmflow_features=None):
         # Adjacent pairs can share precomputed FeatureNet pyramids.
-        if feat_ext0 is None or feat_ext1 is None:
+        if feat_ext0 is None and feat_ext1 is None:
             with torch.profiler.record_function("GMFSS/FeatureNet"):
                 features = self.feat_ext(torch.cat((img0, img1), dim=0))
-            if feat_ext0 is None:
-                feat_ext0 = [feature[:1] for feature in features]
-            if feat_ext1 is None:
-                feat_ext1 = [feature[1:2] for feature in features]
+            feat_ext0 = [feature[:1] for feature in features]
+            feat_ext1 = [feature[1:2] for feature in features]
+        elif feat_ext0 is None:
+            with torch.profiler.record_function("GMFSS/FeatureNet"):
+                feat_ext0 = list(self.feat_ext(img0))
+        elif feat_ext1 is None:
+            with torch.profiler.record_function("GMFSS/FeatureNet"):
+                feat_ext1 = list(self.feat_ext(img1))
 
         img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
