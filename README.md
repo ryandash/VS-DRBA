@@ -55,3 +55,23 @@ This branch intentionally retains only the RIFE 4.25, 4.26, and 4.26 Heavy imple
 GMFSS Union is being ported as a separate pipeline rather than as another RIFE selector. Its first integration stages are GMFlow, FeatureNet, MetricNet, DRM, SoftSplat, the RIFE 4.26 Heavy auxiliary network, and FusionNet. TensorRT compilation will be introduced per network, with PyTorch/CUDA warping and DRM kept outside TensorRT until correctness is established.
 
 Target validation hardware: NVIDIA GeForce RTX 5070 Ti (Blackwell). Initial TensorRT validation should use fixed spatial dimensions and FP16, with engine cache keys including GPU, TensorRT/PyTorch versions, resolution, and precision.
+
+
+## GMFSS Union VapourSynth API
+
+GMFSS Union is available as a separate pipeline and does not add a new value to the RIFE `model` selector:
+
+```python
+from vsdrba import drba_gmfss
+
+clip = drba_gmfss(
+    clip,
+    factor_num=2,
+    factor_den=1,
+    scale=1.0,
+    sc=True,
+    trt=False,
+)
+```
+
+The GMFSS clip path currently requires RGBH or RGBS input and CUDA. It uses eager PyTorch; TensorRT is not yet implemented for GMFSS and `trt=True` is rejected. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and current validation limits.
