@@ -49,8 +49,10 @@ class Model:
             network.load_state_dict(state_dict, strict=True)
 
     def reuse(self, img0, img1, scale):
-        feat11, feat12, feat13 = self.feat_ext(img0)
-        feat21, feat22, feat23 = self.feat_ext(img1)
+        with torch.profiler.record_function("GMFSS/FeatureNet/frame0"):
+            feat11, feat12, feat13 = self.feat_ext(img0)
+        with torch.profiler.record_function("GMFSS/FeatureNet/frame1"):
+            feat21, feat22, feat23 = self.feat_ext(img1)
         feat_ext0 = [feat11, feat12, feat13]
         feat_ext1 = [feat21, feat22, feat23]
 
@@ -63,13 +65,16 @@ class Model:
         else:
             imgf0, imgf1 = img0, img1
 
-        flow01 = self.flownet(imgf0, imgf1)
-        flow10 = self.flownet(imgf1, imgf0)
+        with torch.profiler.record_function("GMFSS/GMFlow/center_to_prev"):
+            flow01 = self.flownet(imgf0, imgf1)
+        with torch.profiler.record_function("GMFSS/GMFlow/center_to_next"):
+            flow10 = self.flownet(imgf1, imgf0)
         if scale != 1.0:
             flow01 = F.interpolate(flow01, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) / scale
             flow10 = F.interpolate(flow10, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) / scale
 
-        metric0, metric1 = self.metricnet(img0, img1, flow01, flow10)
+        with torch.profiler.record_function("GMFSS/MetricNet"):
+            metric0, metric1 = self.metricnet(img0, img1, flow01, flow10)
         return flow01, flow10, metric0, metric1, feat_ext0, feat_ext1
 
     def inference(self, img0, img1, reuse_things, timestep0, timestep1, rife, enable_mask=True):
@@ -81,27 +86,28 @@ class Model:
         F1t, F2t = timestep0 * flow01, timestep1 * flow10
         Z1t, Z2t = timestep0 * metric0, timestep1 * metric1
 
-        img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
-        I1t = warp(img0, F1t, Z1t, strMode="soft")
-        img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
-        I2t = warp(img1, F2t, Z2t, strMode="soft")
-
-        feat1t1 = warp(feat11, F1t, Z1t, strMode="soft")
-        feat2t1 = warp(feat21, F2t, Z2t, strMode="soft")
-
-        F1td = F.interpolate(F1t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
-        Z1d = F.interpolate(Z1t, scale_factor=0.5, mode="bilinear", align_corners=False)
-        feat1t2 = warp(feat12, F1td, Z1d, strMode="soft")
-        F2td = F.interpolate(F2t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
-        Z2d = F.interpolate(Z2t, scale_factor=0.5, mode="bilinear", align_corners=False)
-        feat2t2 = warp(feat22, F2td, Z2d, strMode="soft")
-
-        F1tdd = F.interpolate(F1t, scale_factor=0.25, mode="bilinear", align_corners=False) * 0.25
-        Z1dd = F.interpolate(Z1t, scale_factor=0.25, mode="bilinear", align_corners=False)
-        feat1t3 = warp(feat13, F1tdd, Z1dd, strMode="soft")
-        F2tdd = F.interpolate(F2t, scale_factor=0.25, mode="bilinear", align_corners=False) * 0.25
-        Z2dd = F.interpolate(Z2t, scale_factor=0.25, mode="bilinear", align_corners=False)
-        feat2t3 = warp(feat23, F2tdd, Z2dd, strMode="soft")
+        with torch.profiler.record_function("GMFSS/SoftSplat/feature_and_rgb_warps"):
+            img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
+            I1t = warp(img0, F1t, Z1t, strMode="soft")
+            img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
+            I2t = warp(img1, F2t, Z2t, strMode="soft")
+    
+            feat1t1 = warp(feat11, F1t, Z1t, strMode="soft")
+            feat2t1 = warp(feat21, F2t, Z2t, strMode="soft")
+    
+            F1td = F.interpolate(F1t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
+            Z1d = F.interpolate(Z1t, scale_factor=0.5, mode="bilinear", align_corners=False)
+            feat1t2 = warp(feat12, F1td, Z1d, strMode="soft")
+            F2td = F.interpolate(F2t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
+            Z2d = F.interpolate(Z2t, scale_factor=0.5, mode="bilinear", align_corners=False)
+            feat2t2 = warp(feat22, F2td, Z2d, strMode="soft")
+    
+            F1tdd = F.interpolate(F1t, scale_factor=0.25, mode="bilinear", align_corners=False) * 0.25
+            Z1dd = F.interpolate(Z1t, scale_factor=0.25, mode="bilinear", align_corners=False)
+            feat1t3 = warp(feat13, F1tdd, Z1dd, strMode="soft")
+            F2tdd = F.interpolate(F2t, scale_factor=0.25, mode="bilinear", align_corners=False) * 0.25
+            Z2dd = F.interpolate(Z2t, scale_factor=0.25, mode="bilinear", align_corners=False)
+            feat2t3 = warp(feat23, F2tdd, Z2dd, strMode="soft")
 
         if isinstance(timestep0, torch.Tensor) and enable_mask:
             timestep0 = warp(timestep0, F1t, Z1t, strMode="soft")
@@ -128,10 +134,11 @@ class Model:
             mask0, mask1 = get_mask(192, 0.25)
             feat1t3, feat2t3 = torch.where(mask0, feat2t3, feat1t3), torch.where(mask1, feat1t3, feat2t3)
 
-        out = self.fusionnet(
-            torch.cat([I1t, rife, I2t], dim=1),
-            torch.cat([feat1t1, feat2t1], dim=1),
-            torch.cat([feat1t2, feat2t2], dim=1),
-            torch.cat([feat1t3, feat2t3], dim=1),
-        )
+        with torch.profiler.record_function("GMFSS/FusionNet"):
+            out = self.fusionnet(
+                torch.cat([I1t, rife, I2t], dim=1),
+                torch.cat([feat1t1, feat2t1], dim=1),
+                torch.cat([feat1t2, feat2t2], dim=1),
+                torch.cat([feat1t3, feat2t3], dim=1),
+            )
         return torch.clamp(out, 0, 1)
