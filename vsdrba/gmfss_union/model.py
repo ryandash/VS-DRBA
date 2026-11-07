@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from .GMFSS import Model
 from .drm import calc_drm_gmfss, calc_drm_rife_auxiliary
 from .utils import load_state_dict, resize
-from ..IFNet_HDv3_v4_26_heavy import IFNet
+from ..IFNet_HDv3_v4_25 import IFNet
 
 
 class GMFSS_UNION:
@@ -18,6 +18,7 @@ class GMFSS_UNION:
         scale=1.0,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         trt=False,
+        rife_weights=None,
     ):
         self.model = Model()
         self.model.load_model(weights, -1)
@@ -64,7 +65,12 @@ class GMFSS_UNION:
         # The original DRBA checkpoint also contains teacher/caltime training
         # modules. They are not part of inference, but every inference parameter
         # must be present and load successfully.
-        rife_state = load_state_dict(os.path.join(weights, "rife.pkl"))
+        if rife_weights is None:
+            raise ValueError(
+                "A RIFE 4.25 checkpoint path is required. Download it with "
+                "python -m vsdrba and pass the path to flownet_v4.25.pkl."
+            )
+        rife_state = load_state_dict(rife_weights)
         load_result = self.ifnet.load_state_dict(rife_state, strict=False)
         if load_result.missing_keys:
             raise RuntimeError(
@@ -87,6 +93,7 @@ class GMFSS_UNION:
             )
 
         self.scale = scale
+        self.rife_weights = str(rife_weights)
 
     def _rife_inference(self, img0, img1, timestep):
         """Run the auxiliary RIFE network on dimensions safe for its five scales.
