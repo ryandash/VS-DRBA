@@ -3,11 +3,11 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 
 > This project is modified from [HolyWu/vs-rife](https://github.com/HolyWu/vs-rife) and achieves nearly the same interpolation quality as the original [DRBA](https://github.com/routineLife1/DRBA) project.
 >
-> With TensorRT integration, it achieves a 400% acceleration, enabling real-time playback on high-performance NVIDIA GPUs.
+> With TensorRT-RTX integration, it targets accelerated inference, enabling real-time playback on high-performance NVIDIA GPUs.
 >
 
 ## Dependencies
-- [PyTorch](https://pytorch.org/get-started/) 2.6.0 or later
+- [PyTorch](https://pytorch.org/get-started/) 2.11.x (CUDA 12.9 build for the documented RTX setup)
 - [VapourSynth](http://www.vapoursynth.com/) R66 or later
 - [vs-miscfilters-obsolete](https://github.com/vapoursynth/vs-miscfilters-obsolete) (only needed for scene change detection)
 - [cupy](https://github.com/cupy/cupy) cupy-cuda11x or later (critical for acceleration)
@@ -61,11 +61,10 @@ clip = drba_gmfss(
     scale=1.0,
     sc=True,
     trt=False,
-    gmflow_trt=False,
 )
 ```
 
-The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` compiles the selected convolutional submodules with TensorRT-RTX. The GMFlow transformer/matching, DRM, SoftSplat, and VapourSynth orchestration remain outside the engine boundary by design. RTX import or engine-build failures are fatal; there is no automatic standard-TensorRT or eager fallback. The first interpolated frame triggers engine compilation for the padded clip dimensions. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
+The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` compiles the selected convolutional submodules with TensorRT-RTX. The GMFlow transformer/matching, DRM, SoftSplat, RIFE auxiliary warping blocks, and VapourSynth orchestration remain outside the engine boundary by design. RTX import or engine-build failures are fatal; there is no automatic standard-TensorRT or eager fallback. The first interpolated frame triggers engine compilation for the padded clip dimensions. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
 
 
 ## TensorRT-RTX on Windows
