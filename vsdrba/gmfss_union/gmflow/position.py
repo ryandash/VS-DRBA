@@ -6,7 +6,7 @@ import math
 import torch
 import torch.nn as nn
 
-from models.utils.tools import get_ones_tensor_size
+from ..utils import get_ones_tensor_size
 
 tensor_cache = dict()
 
