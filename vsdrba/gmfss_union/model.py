@@ -38,9 +38,8 @@ class GMFSS_UNION:
                     "Install a Torch-TensorRT build compatible with this PyTorch version."
                 ) from exc
 
-            # Begin with the two convolution-dominant modules that have clean,
-            # tensor-only interfaces. Compilation is lazy: engines are built
-            # on the first VapourSynth frame with the actual padded dimensions.
+            # Compile the convolution-dominant GMFSS modules independently.
+            # Compilation is lazy and engines specialize to the input shape.
             trt_options = {
                 "enabled_precisions": {torch.float16, torch.float32},
                 "optimization_level": 3,
