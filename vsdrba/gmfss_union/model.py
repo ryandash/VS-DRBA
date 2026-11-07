@@ -1,8 +1,9 @@
 # for high quality output
-from models.model_gmfss_union.GMFSS import Model
-from vsdrba.IFNet_HDv3_v4_26_heavy import IFNet
-from models.drm import calc_drm_gmfss, calc_drm_rife_auxiliary
-from models.utils.tools import *
+from .GMFSS import Model
+from ..IFNet_HDv3_v4_26_heavy import IFNet
+from .drm import calc_drm_gmfss, calc_drm_rife_auxiliary
+from .utils import load_state_dict, resize
+import torch.nn.functional as F
 import torch
 import os
 
@@ -16,8 +17,8 @@ class GMFSS_UNION:
         self.model.eval()
         self.ifnet = IFNet().to(device).eval()
         self.ifnet.load_state_dict(
-            convert(torch.load(os.path.join(weights, "rife.pkl"), map_location='cpu')),
-            strict=False)
+            load_state_dict(os.path.join(weights, "rife.pkl")),
+            strict=True)
         self.scale = scale
         self.scale_list = [16 / self.scale, 8 / self.scale, 4 / self.scale, 2 / self.scale, 1 / self.scale]
         self.pad_size = 128
