@@ -1,7 +1,10 @@
-"""Select the CUDA SoftSplat kernel when CuPy is available, else PyTorch."""
+"""Select CuPy SoftSplat when its CUDA runtime is available, else PyTorch."""
 
 try:
-    import cupy  # noqa: F401
+    import cupy
+
+    if cupy.cuda.get_cuda_path() is None:
+        raise RuntimeError("CuPy cannot locate a CUDA toolkit")
     from .softsplat import softsplat
 except Exception:
     from .softsplat_torch import softsplat
