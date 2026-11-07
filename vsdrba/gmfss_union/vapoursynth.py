@@ -42,13 +42,17 @@ def _tensor_to_frame(
     if not torch.isfinite(tensor).all().item():
         raise vs.Error("gmfss: TensorRT/PyTorch produced NaN or infinite output values")
 
-    # Materialize a contiguous CPU copy in the exact sample type of the
-    # destination frame. This avoids passing a half-precision or strided
-    # TensorRT buffer directly into VapourSynth's frame storage.
+    # Transfer the complete output once. Per-plane asynchronous copies followed
+    # by .numpy() caused repeated host synchronization on every output frame.
+    cpu_tensor = tensor.to(device="cpu", non_blocking=False).contiguous()
+    cpu_output = cpu_tensor.numpy()
+    if not np.isfinite(cpu_output).all():
+        raise vs.Error("gmfss: TensorRT/PyTorch produced NaN or infinite output values")
+
     output = frame.copy()
     for i in range(frame.format.num_planes):
         destination = np.asarray(output[i])
-        source = tensor[i].to(device="cpu", dtype=torch.from_numpy(destination).dtype).contiguous().numpy()
+        source = cpu_output[i]
         if source.shape != destination.shape:
             raise vs.Error(
                 f"gmfss: output plane {i} has shape {source.shape}; "
