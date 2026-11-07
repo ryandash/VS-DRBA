@@ -1,31 +1,50 @@
-# GMFSS Union port
+# GMFSS Union
 
-This package is the independent implementation boundary for GMFSS Union. It is deliberately separate from `drba_rife()`: GMFSS Union uses GMFlow + MetricNet for its motion/metric fields, and its DRM must not be confused with the RIFE block-0 DRM path.
+GMFSS Union is exposed as a separate VapourSynth pipeline, not as a RIFE model selector. The existing `drba_rife()` API and its RIFE 4.25, 4.26, and 4.26 Heavy choices remain unchanged.
+
+## VapourSynth usage
+
+```python
+from vsdrba.gmfss_union import drba_gmfss
+
+clip = drba_gmfss(
+    clip,
+    factor_num=2,
+    factor_den=1,
+    scale=1.0,
+    sc=True,
+    trt=False,
+)
+```
+
+The input must be a constant-format RGBH or RGBS VapourSynth clip, contain at least two frames, and have CUDA available. The default checkpoint directory is `vsdrba/gmfss_union/weights/train_log_gmfss_union`; pass `weights=...` to override it. `factor_num/factor_den` controls the output frame-rate multiplier. Alternatively, specify both `fps_num` and `fps_den` to request an absolute output frame rate.
+
+`sc=True` uses existing `_SceneChangeNext` frame properties. Supply `sc_threshold` to run VapourSynth's `misc.SCDetect` first. `linear=True` selects the linear DRM variant.
+
+TensorRT is not implemented for this clip path yet. `trt=True` raises an explicit error; use `trt=False` for eager PyTorch/CUDA inference. The adapter pads frame dimensions to multiples of 32 and crops the result back to the source dimensions. It serializes model inference through a lock because the first implementation prioritizes correctness over concurrent frame throughput.
 
 ## Inference graph
 
-1. Three consecutive RGB frames are prepared and padded to model-compatible dimensions.
-2. GMFlow estimates half-resolution motion from the center frame to its two neighbors.
+1. Three consecutive RGB frames are prepared and padded.
+2. GMFlow estimates half-resolution motion from the center frame to its neighbors.
 3. FeatureNet extracts multiscale features; MetricNet estimates per-direction metric maps.
-4. GMFSS DRM combines flow-distance maps and learned metrics to form the spatial timestep maps.
-5. SoftSplat performs eager CUDA/PyTorch warping and hole handling.
+4. GMFSS DRM forms spatial timestep maps.
+5. SoftSplat performs CUDA/PyTorch warping and hole handling.
 6. RIFE 4.26 Heavy supplies the auxiliary intermediate prediction.
-7. FusionNet combines warped RGB, the auxiliary prediction, and aligned multiscale features into the full-resolution output.
+7. FusionNet combines warped RGB, the auxiliary prediction, and aligned multiscale features.
+
+The RIFE auxiliary checkpoint includes `teacher.*` and `caltime.*` training-only parameters. Those keys are intentionally ignored; all inference parameters must load, and any other unexpected key causes initialization to fail.
 
 ## TensorRT boundary
 
-Compile independent engines for GMFlow, FeatureNet, MetricNet, RIFE 4.26 Heavy, and FusionNet. Keep DRM, SoftSplat, masks, frame caching, and VapourSynth scheduling outside TensorRT for the first correctness pass. Do not attempt a monolithic exported GMFSS graph.
+The intended future export targets are GMFlow, FeatureNet, MetricNet, RIFE 4.26 Heavy, and FusionNet independently. DRM, SoftSplat, masks, and VapourSynth frame orchestration remain outside TensorRT until eager inference and numerical parity are established. The initial hardware target is the GeForce RTX 5070 Ti (Blackwell), batch 1, FP16, fixed spatial shapes.
 
-Initial target: GeForce RTX 5070 Ti (Blackwell), batch 1, FP16, fixed shapes. Validate each engine against eager PyTorch before enabling it in the VapourSynth frame path. Engine cache identity must include model/checkpoint identity, GPU name, TensorRT and Torch-TensorRT versions, precision, and input dimensions.
+## Validation status
 
-## Milestone 1 status
-
-- [x] Isolate the GMFSS Union package boundary.
-- [x] Define shared TensorRT build settings for the per-network engines.
-- [x] Retain only RIFE 4.25, 4.26, and 4.26 Heavy in the public RIFE selector and downloader.
-- [x] Remove other RIFE implementation modules.
-- [x] Bring over GMFlow, FeatureNet, MetricNet, FusionNet, GMFSS orchestration, DRM, and SoftSplat; rewrite imports to remain inside `vsdrba.gmfss_union`.
-- [x] Adapt the GMFSS auxiliary inference call to the retained VS-DRBA RIFE 4.26 Heavy forward API.
-- [x] Add all five GMFSS Union checkpoint files to the repository.\n- [ ] Verify checkpoint integrity and strict state-dict compatibility on the target GPU.
-- [ ] Add eager PyTorch parity tests and per-network TensorRT export tests.
-- [ ] Integrate the VapourSynth public API after eager inference is correct.
+- [x] Port GMFlow, FeatureNet, MetricNet, FusionNet, DRM, SoftSplat, and auxiliary RIFE integration.
+- [x] Load the five GMFSS Union checkpoints.
+- [x] Run a 256x256 synthetic tensor smoke test on an RTX 5070 Ti.
+- [x] Add a separate VapourSynth clip adapter with rational frame-rate scheduling and optional scene-change handling.
+- [ ] Validate clip output against real consecutive frames and inspect visual quality.
+- [ ] Validate 1080p and 4K performance, VRAM, and frame scheduling.
+- [ ] Add eager numerical parity tests and per-network TensorRT export tests.
