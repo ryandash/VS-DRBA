@@ -6,7 +6,6 @@ import math
 import os
 from fractions import Fraction
 from threading import Lock
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -50,9 +49,6 @@ def drba_gmfss(
     sc_threshold: float | None = None,
     linear: bool = False,
     trt: bool = False,
-    profile_dir: str | os.PathLike | None = None,
-    profile_frames: int = 3,
-    profile_skip_frames: int = 4,
 ) -> vs.VideoNode:
     """Interpolate an RGB VapourSynth clip with GMFSS Union.
 
@@ -62,12 +58,6 @@ def drba_gmfss(
 
     The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
     from vsdrba/models by default. Use rife_weights to override its location.
-
-    Set profile_dir to capture one Chrome trace per selected interpolated
-    frame. Profiling is disabled by default. profile_skip_frames skips the
-    first output frame indices (including the first lazy TensorRT build), and
-    profile_frames limits the number of traces. Profiling adds substantial
-    overhead and must not be used to measure production FPS.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("gmfss: input is not a VapourSynth clip")
@@ -96,14 +86,6 @@ def drba_gmfss(
         factor_num, factor_den = factor.as_integer_ratio()
     if factor_num <= factor_den:
         raise vs.Error("gmfss: target frame rate must be higher than source frame rate")
-    if profile_frames < 1:
-        raise vs.Error("gmfss: profile_frames must be at least 1")
-    if profile_skip_frames < 0:
-        raise vs.Error("gmfss: profile_skip_frames cannot be negative")
-    profile_path = Path(profile_dir).expanduser() if profile_dir is not None else None
-    if profile_path is not None:
-        profile_path.mkdir(parents=True, exist_ok=True)
-
     package_weights = Path(__file__).resolve().parent / "weights" / "train_log_gmfss_union"
     if not package_weights.is_dir():
         # Source checkout layout keeps the checkpoints at repository-root weights/.
@@ -159,7 +141,6 @@ def drba_gmfss(
     padding = (0, padded_width - width, 0, padded_height - height)
     stream = torch.cuda.Stream(device=device)
     inference_lock = Lock()
-    profiles_written = 0
 
     @torch.inference_mode()
     def interpolate(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
@@ -176,35 +157,9 @@ def drba_gmfss(
                 image1 = F.pad(image1, padding)
                 image2 = F.pad(image2, padding)
 
-            nonlocal profiles_written
-            capture_profile = (
-                profile_path is not None
-                and n >= profile_skip_frames
-                and profiles_written < profile_frames
+            outputs, _ = model.inference_ts_drba(
+                image0, image1, image2, [t], linear=linear
             )
-            if capture_profile:
-                # Start and stop Kineto on this same VapourSynth callback
-                # thread; do not wrap the full VapourSynth render externally.
-                with torch.profiler.profile(
-                    activities=[
-                        torch.profiler.ProfilerActivity.CPU,
-                        torch.profiler.ProfilerActivity.CUDA,
-                    ],
-                    record_shapes=True,
-                    profile_memory=True,
-                ) as prof:
-                    with torch.profiler.record_function("GMFSS/Inference"):
-                        outputs, _ = model.inference_ts_drba(
-                            image0, image1, image2, [t], linear=linear
-                        )
-                trace_file = profile_path / f"gmfss_frame_{n:06d}.json"
-                prof.export_chrome_trace(str(trace_file))
-                profiles_written += 1
-                print(f"GMFSS profiler trace written: {trace_file}")
-            else:
-                outputs, _ = model.inference_ts_drba(
-                    image0, image1, image2, [t], linear=linear
-                )
             output = outputs[0]
             if any(padding):
                 output = output[:, :, :height, :width]
