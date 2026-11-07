@@ -12,16 +12,7 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 - [vs-miscfilters-obsolete](https://github.com/vapoursynth/vs-miscfilters-obsolete) (only needed for scene change detection)
 - [cupy](https://github.com/cupy/cupy) cupy-cuda11x or later (critical for acceleration)
 
-`trt` requires additional packages:
-- [TensorRT](https://developer.nvidia.com/tensorrt) 10.7.0.post1 or later
-- [Torch-TensorRT](https://pytorch.org/TensorRT/) matching the installed PyTorch version and CUDA build
-
-To install the latest stable version of PyTorch, Torch-TensorRT and cupy, run:
-```
-pip install -U packaging setuptools wheel
-pip install -U torch torchvision torch_tensorrt --index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://pypi.nvidia.com
-pip install -U cupy-cuda12x
-```
+`trt=True` requires [TensorRT-RTX](https://developer.nvidia.com/tensorrt-rtx) and [Torch-TensorRT-RTX](https://docs.pytorch.org/TensorRT/getting_started/tensorrt_rtx.html). Standard TensorRT is not supported by this branch. The documented Windows configuration uses Python 3.13, PyTorch 2.11, and CUDA 12.9.
 
 ## Installation
 ```
@@ -74,39 +65,35 @@ clip = drba_gmfss(
 )
 ```
 
-The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` experimentally compiles FeatureNet and FusionNet through Torch-TensorRT. On the experimental `feature/gmflow-tensorrt` branch, `gmflow_trt=True` additionally targets GMFlow's convolutional backbone only; its transformer, local matching, and grid sampling remain eager. The first interpolated frame triggers lazy engine compilation for the padded clip dimensions. Keep `trt=False` for the baseline path. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
+The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` compiles the selected convolutional submodules with TensorRT-RTX. The GMFlow transformer/matching, DRM, SoftSplat, and VapourSynth orchestration remain outside the engine boundary by design. RTX import or engine-build failures are fatal; there is no automatic standard-TensorRT or eager fallback. The first interpolated frame triggers engine compilation for the padded clip dimensions. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
 
 
-## Standard TensorRT on Windows (CUDA 12.8)
+## TensorRT-RTX on Windows
 
-Torch-TensorRT must match the installed PyTorch build. For example, the following package combination targets a PyTorch `2.11.0+cu128` environment:
+This branch targets **Torch-TensorRT-RTX 2.11.0**, **PyTorch 2.11.0**, **CUDA 12.9**, and **TensorRT-RTX 1.3**. Install the CUDA 12.9 Update 1 Toolkit and a driver compatible with it. The CUDA Toolkit is a system prerequisite; the CUDA runtime bundled with PyTorch is not a substitute for the required Toolkit installation. Verify with `nvcc --version`.
 
-- `torch==2.11.0+cu128`
-- `torch-tensorrt==2.11.0+cu128`
-- Standard NVIDIA TensorRT `10.15.1.29` CUDA 12 runtime packages (`tensorrt-cu12`, `tensorrt-cu12-bindings`, and `tensorrt-cu12-libs`)
-
-Do not install TensorRT-RTX for this configuration. Also avoid leaving the CUDA 13 TensorRT metapackage/runtime installed alongside the CUDA 12 runtime: the generic `tensorrt` metapackage may select the CUDA 13 distribution even though this PyTorch/Torch-TensorRT build targets CUDA 12.8.
-
-In the portable Python environment, remove the generic/CUDA 13 distributions while retaining the CUDA 12 TensorRT packages required by Torch-TensorRT:
+Use a separate portable Python environment or back up the existing one before changing runtimes. Remove standard TensorRT packages first; do not mix the standard and RTX Python runtimes:
 
 ```bat
-python -m pip uninstall -y tensorrt tensorrt-cu13 tensorrt-cu13-bindings tensorrt-cu13-libs
-python -m pip install --force-reinstall --no-deps --extra-index-url https://pypi.nvidia.com "tensorrt-cu12==10.15.1.29" "tensorrt-cu12-bindings==10.15.1.29" "tensorrt-cu12-libs==10.15.1.29"
+python -m pip uninstall -y torch-tensorrt tensorrt tensorrt-cu12 tensorrt-cu12-bindings tensorrt-cu12-libs tensorrt-cu13 tensorrt-cu13-bindings tensorrt-cu13-libs
 ```
 
-Reinstalling the CUDA 12 packages after removing CUDA 13 is intentional: the CUDA 12 and CUDA 13 binding distributions can install files into the same Python package location. Reinstalling CUDA 12 restores the correct binding files.
-
-Then verify the CUDA 12 runtime is still importable:
+Install the matching PyTorch CUDA 12.9 wheels and Torch-TensorRT-RTX:
 
 ```bat
-python -c "import torch, tensorrt, torch_tensorrt; print('PyTorch:', torch.__version__); print('TensorRT:', tensorrt.__version__); print('TensorRT module:', tensorrt.__file__)"
+python -m pip install --index-url https://download.pytorch.org/whl/cu129 torch==2.11.0+cu129 torchvision==0.26.0+cu129
+python -m pip install torch-tensorrt-rtx==2.11.0 --extra-index-url https://download.pytorch.org/whl/torch-tensorrt-rtx
+python -m pip install -U cupy-cuda12x
 python -m pip check
 ```
 
-Run the repository smoke test to verify that Torch-TensorRT can actually compile and execute a small FP16 convolution through the `torch.compile` backend (an import-only check does not prove that engine compilation works):
+If the RTX runtime wheel is not resolved for your platform, follow the Windows-specific installation instructions in the official [Torch-TensorRT-RTX guide](https://docs.pytorch.org/TensorRT/getting_started/tensorrt_rtx.html) and the NVIDIA [TensorRT-RTX prerequisites](https://docs.nvidia.com/deeplearning/tensorrt-rtx/latest/installing-tensorrt-rtx/prerequisites.html). Do not install the standard `tensorrt` or `torch-tensorrt` packages as a workaround.
+
+Verify the runtime and compile a small FP16 engine:
 
 ```bat
+python -c "import torch, torch_tensorrt, tensorrt_rtx; print('PyTorch:', torch.__version__); print('CUDA:', torch.version.cuda); print('Torch-TensorRT-RTX:', torch_tensorrt.__version__); print('TensorRT-RTX:', tensorrt_rtx.__version__); print('GPU:', torch.cuda.get_device_name(0))"
 python -m vsdrba.verify_tensorrt
 ```
 
-If the smoke test fails, keep `trt=False` / `gmflow_trt=False` and provide the complete traceback. The eager PyTorch path does not require TensorRT. These commands are specific to the stated CUDA 12.8 environment; do not apply them to a CUDA 13 PyTorch installation.
+The smoke test rejects standard TensorRT distributions and fails if TensorRT-RTX cannot compile or execute its engine. For GMFSS Union, enable `trt=True`; compilation failures are surfaced rather than silently disabling acceleration. The deliberately uncompiled warping/DRM/orchestration operations remain PyTorch operations by design.
