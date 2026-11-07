@@ -73,10 +73,13 @@ class GMFSS_UNION:
                         "GMFlow TensorRT was requested, but torch_tensorrt could not be imported."
                     ) from exc
 
-            # GMFlow has several distinct compute regions. Compile the CNN,
-            # transformer stack, flow-propagation attention, and convex
-            # upsampler independently so unsupported matching/grid-sampling
-            # operations remain on the eager PyTorch path.
+            # Only compile GMFlow's convolutional feature backbone for now.
+            # The transformer contains reshape/view operations over partitioned
+            # attention windows; Torch-TensorRT's AOT fake-tensor export cannot
+            # currently represent some of those non-contiguous layouts (see
+            # PyTorch/Torch-TensorRT view/stride export failure). Keep the
+            # transformer, matching, flow attention, and upsampler eager until
+            # each has an independently validated export path.
             gmflow_options = {
                 "enabled_precisions": {torch.float16, torch.float32},
                 "optimization_level": 3,
@@ -88,21 +91,9 @@ class GMFSS_UNION:
                 gmflow.backbone, backend="tensorrt", dynamic=False,
                 options=gmflow_options,
             )
-            gmflow.transformer = torch.compile(
-                gmflow.transformer, backend="tensorrt", dynamic=False,
-                options=gmflow_options,
-            )
-            gmflow.feature_flow_attn = torch.compile(
-                gmflow.feature_flow_attn, backend="tensorrt", dynamic=False,
-                options=gmflow_options,
-            )
-            gmflow.upsampler = torch.compile(
-                gmflow.upsampler, backend="tensorrt", dynamic=False,
-                options=gmflow_options,
-            )
             print(
-                "Experimental GMFlow TensorRT enabled for backbone, transformer, "
-                "flow attention, and upsampler; matching and warping remain eager."
+                "Experimental GMFlow TensorRT enabled for the CNN backbone only; "
+                "transformer, matching, attention, and upsampling remain eager."
             )
 
         # Load the standalone RIFE 4.25 checkpoint. The 4.25 encoder emits
