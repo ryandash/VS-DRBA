@@ -51,7 +51,7 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     + str(tensorrt_rtx.__version__)
                 )
                 artifact_path = (
-                    os.path.join(self.cache_dir, cache_name + ".pt2")
+                    os.path.join(self.cache_dir, cache_name + ".engine")
                     if self.cache_dir is not None else None
                 )
                 runtime_cache_path = (
