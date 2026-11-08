@@ -586,17 +586,17 @@ def drba_rife(
                 if real_n in encode_cache:
                     f0 = encode_cache[real_n]
                 else:
-                    f0 = module_refs["encode"](img0)
+                    f0 = encode(img0)
 
                 if real_n_next in encode_cache:
                     f1 = encode_cache[real_n_next]
                 else:
-                    f1 = module_refs["encode"](img1)
+                    f1 = encode(img1)
 
                 if real_n_next_next in encode_cache:
                     f2 = encode_cache[real_n_next_next]
                 else:
-                    f2 = module_refs["encode"](img2)
+                    f2 = encode(img2)
             else:
                 img0 = frame_to_tensor(f[0], device)
                 img1 = frame_to_tensor(f[1], device)
@@ -625,15 +625,15 @@ def drba_rife(
                         batch_img0, batch_img1, batch_t, batch_f0, batch_f1
                     )[:, :2]
                 else:
-                    batch_flow = module_refs["block0"](batch_img0, batch_img1, batch_t)[:, :2]
+                    batch_flow = block0(batch_img0, batch_img1, batch_t)[:, :2]
 
                 flo0, flo1 = batch_flow.chunk(2, dim=0)
             elif Head is not None:
-                flo0 = module_refs["block0"](img1, img0, t05, f1, f0)[:, :2]
-                flo1 = module_refs["block0"](img1, img2, t05, f1, f2)[:, :2]
+                flo0 = block0(img1, img0, t05, f1, f0)[:, :2]
+                flo1 = block0(img1, img2, t05, f1, f2)[:, :2]
             else:
-                flo0 = module_refs["block0"](img1, img0, t05)[:, :2]
-                flo1 = module_refs["block0"](img1, img2, t05)[:, :2]
+                flo0 = block0(img1, img0, t05)[:, :2]
+                flo1 = block0(img1, img2, t05)[:, :2]
 
             ones_mask = flo0.clone() * 0 + 1
             cflo0 = torch.cat((flo0, ones_mask), dim=1)
@@ -678,7 +678,7 @@ def drba_rife(
             if Head is not None:
                 output = flownet(img1, img0, drm, f1, f0)
             else:
-                output = module_refs["flownet"](img1, img0, drm)
+                output = flownet(img1, img0, drm)
 
             inf_stream.synchronize()
 
