@@ -75,6 +75,7 @@ def drba_rife(
         trt_workspace_size: int = 0,
         trt_max_aux_streams: int | None = None,
         trt_optimization_level: int | None = None,
+        block0_batch_size: int = 2,
         trt_cache_dir: str = model_dir,
 ) -> vs.VideoNode:
     """Real-Time Intermediate Flow Estimation for Video Frame Interpolation
@@ -111,6 +112,8 @@ def drba_rife(
     :param trt_optimization_level:  Builder optimization level. Higher level allows TensorRT to spend more building time
                                     for more optimization options. Valid values include integers from 0 to the maximum
                                     optimization level, which is currently 5. (default is 3)
+    :param block0_batch_size:       Experimental batch size for the two independent block0 flow estimates.
+                                    Supported values are 1 (baseline) and 2 (batched execution).
     :param trt_cache_dir:           Directory for TensorRT-RTX runtime JIT caches. Cached kernels are reused on
                                     subsequent runs when the model, input shape, precision, GPU, and runtime match.
     """
@@ -128,6 +131,9 @@ def drba_rife(
 
     if model not in models:
         raise vs.Error(f"rife: model must be one of {models}")
+
+    if block0_batch_size not in (1, 2):
+        raise vs.Error("rife: block0_batch_size must be 1 or 2")
 
     if factor_num < 1:
         raise vs.Error("rife: factor_num must be at least 1")
@@ -272,7 +278,9 @@ def drba_rife(
             + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
         )
         flownet_runtime_cache = os.path.join(cache_dir, cache_name + ".flownet.runtime_cache")
-        block0_runtime_cache = os.path.join(cache_dir, cache_name + ".block0.runtime_cache")
+        block0_runtime_cache = os.path.join(
+            cache_dir, cache_name + f".block0_b{block0_batch_size}.runtime_cache"
+        )
         encode_runtime_cache = os.path.join(cache_dir, cache_name + ".encode.runtime_cache")
 
         from torch_tensorrt.dynamo.conversion.impl.grid import GridSamplerInterpolationMode
@@ -354,6 +362,13 @@ def drba_rife(
                     "timestep": {2: dim_height, 3: dim_width},
                 }
 
+        # block0 runs two independent flow estimates. A batch-2 engine lets TensorRT
+        # schedule both estimates in one invocation; batch 1 remains available as a baseline.
+        block0_inputs = tuple(
+            torch.zeros((block0_batch_size, *x.shape[1:]), dtype=x.dtype, device=x.device)
+            for x in flownet_inputs
+        )
+
         flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
 
         flownet = torch_tensorrt.dynamo.compile(
@@ -374,12 +389,12 @@ def drba_rife(
         )
 
         block0_program = torch.export.export(
-            block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
+            block0, block0_inputs, dynamic_shapes=flownet_dynamic_shapes
         )
 
         block0 = torch_tensorrt.dynamo.compile(
             block0_program,
-            flownet_inputs,
+            block0_inputs,
             device=device,
             debug=trt_debug,
             num_avg_timing_iters=4,
@@ -547,9 +562,24 @@ def drba_rife(
 
         with inf_stream_lock, torch.cuda.stream(inf_stream):
             t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
-            if Head is not None:
-                # flo0 -> 0.5 -> 1
-                # flo1 -> 1.5 -> 1
+            if block0_batch_size == 2:
+                # The two half-time flow estimates are independent. Batch them so
+                # TensorRT can execute a larger workload in one engine invocation.
+                batch_img0 = torch.cat((img1, img1), dim=0)
+                batch_img1 = torch.cat((img0, img2), dim=0)
+                batch_t = t05.expand(2, -1, -1, -1)
+
+                if Head is not None:
+                    batch_f0 = torch.cat((f1, f1), dim=0)
+                    batch_f1 = torch.cat((f0, f2), dim=0)
+                    batch_flow = block0(
+                        batch_img0, batch_img1, batch_t, batch_f0, batch_f1
+                    )[:, :2]
+                else:
+                    batch_flow = block0(batch_img0, batch_img1, batch_t)[:, :2]
+
+                flo0, flo1 = batch_flow.chunk(2, dim=0)
+            elif Head is not None:
                 flo0 = block0(img1, img0, t05, f1, f0)[:, :2]
                 flo1 = block0(img1, img2, t05, f1, f2)[:, :2]
             else:
