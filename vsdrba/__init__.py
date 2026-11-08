@@ -375,6 +375,16 @@ def drba_rife(
 
         flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
 
+        block0_program = torch.export.export(
+            block0, block0_inputs, dynamic_shapes=flownet_dynamic_shapes
+        )
+
+        encode_program = None
+        if encode is not None:
+            encode_program = torch.export.export(
+                encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
+            )
+
         def compile_modules():
             compiled_flownet = torch_tensorrt.dynamo.compile(
                 flownet_program,
