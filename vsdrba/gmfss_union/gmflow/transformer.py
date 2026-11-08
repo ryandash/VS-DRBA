@@ -167,8 +167,12 @@ class TransformerLayer(nn.Module):
 
         # single-head attention
         query = self.q_proj(query)  # [B, L, C]
-        key = self.k_proj(key)  # [B, L, C]
-        value = self.v_proj(value)  # [B, L, C]
+
+        # Key and value always come from the same target tensor. Fuse their
+        # two projections into one wider GEMM to reduce CUDA launch overhead.
+        # Concatenating the existing weights preserves checkpoint compatibility.
+        key_value_weight = torch.cat((self.k_proj.weight, self.v_proj.weight), dim=0)
+        key, value = F.linear(target, key_value_weight).chunk(2, dim=-1)
 
         if self.attention_type == 'swin' and attn_num_splits > 1:
             if self.nhead > 1:
