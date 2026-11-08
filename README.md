@@ -36,7 +36,7 @@ This branch intentionally retains only the RIFE 4.25, 4.26, and 4.26 Heavy imple
 
 GMFSS Union is being ported as a separate pipeline rather than as another RIFE selector. Its first integration stages are GMFlow, FeatureNet, MetricNet, DRM, SoftSplat, the RIFE 4.25 auxiliary network, and FusionNet. TensorRT compilation will be introduced per network, with PyTorch/CUDA warping and DRM kept outside TensorRT until correctness is established.
 
-Target validation hardware: NVIDIA GeForce RTX 5070 Ti (Blackwell). Initial TensorRT validation should use fixed spatial dimensions and FP16, with engine cache keys including GPU, TensorRT/PyTorch versions, resolution, and precision.
+Target validation hardware: NVIDIA GeForce RTX 5070 Ti (Blackwell). TensorRT uses fixed spatial dimensions and FP16 for GMFSS; serialized artifacts are device/runtime-specific and are rebuilt on a cache miss.
 
 
 ## GMFSS Union VapourSynth API
@@ -56,7 +56,7 @@ clip = drba_gmfss(
 )
 ```
 
-The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` compiles the selected convolutional submodules with TensorRT-RTX. The GMFlow transformer/matching, DRM, SoftSplat, RIFE auxiliary warping blocks, and VapourSynth orchestration remain outside the engine boundary by design. RTX import or engine-build failures are fatal; there is no automatic standard-TensorRT or eager fallback. The first interpolated frame triggers engine compilation for the padded clip dimensions. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
+The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` compiles the selected convolutional submodules with TensorRT-RTX. The GMFlow transformer/matching, DRM, SoftSplat, RIFE auxiliary warping blocks, and VapourSynth orchestration remain outside the engine boundary by design. RTX import or engine-build failures are fatal; there is no automatic standard-TensorRT or eager fallback. The first use of each padded-shape engine loads a serialized TorchScript artifact from `trt_cache_dir`; only a cache miss triggers TensorRT compilation and serialization. RIFE uses the same artifact cache for FlowNet, Block0, and Encoder. The default cache location is `~/.cache/vsdrba/tensorrt_rtx` for GMFSS and the model directory for RIFE. Artifacts are keyed by checkpoint metadata, input dimensions, precision, GPU, PyTorch, and TensorRT-RTX versions. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for details and validation limits.
 
 
 ## TensorRT-RTX on Windows
