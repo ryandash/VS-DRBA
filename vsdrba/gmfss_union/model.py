@@ -220,9 +220,12 @@ class GMFSS_UNION:
         elif any(pad):
             timestep = F.pad(timestep, pad, mode="replicate")
 
+        # The encoder is frame-local, so batch both images into one call.
+        # This reduces Python/TensorRT dispatch overhead and lets the CNN use
+        # a larger batch without changing either encoded feature tensor.
         with torch.profiler.record_function("GMFSS/RIFE_Encoder"):
-            feat0 = self.ifnet.encode(img0)
-            feat1 = self.ifnet.encode(img1)
+            encoded = self.ifnet.encode(torch.cat((img0, img1), dim=0))
+            feat0, feat1 = encoded.chunk(2, dim=0)
         with torch.profiler.record_function("GMFSS/RIFE_IFNet"):
             prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
         return prediction[:, :, :original_height, :original_width]
