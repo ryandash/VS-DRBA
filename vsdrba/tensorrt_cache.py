@@ -46,17 +46,20 @@ def load_or_compile(
         **compile_kwargs,
     ).eval()
 
+    # TensorRT-RTX may return a plain nn.Module when use_python_runtime=True.
+    # torch_tensorrt.save() does not accept that wrapper directly, so capture
+    # the compiled module as an ExportedProgram first. This keeps the embedded
+    # TensorRT custom ops in the serialized graph rather than saving the
+    # original, uncompiled model.
+    compiled_exported_program = torch.export.export(
+        compiled, tuple(inputs), dynamic_shapes=dynamic_shapes
+    )
+
     # Save to a unique sibling path, then publish atomically. A process interrupted
     # during serialization cannot leave a truncated artifact at the final path.
     temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.ep"
     try:
-        torch_tensorrt.save(
-            compiled,
-            temporary_path,
-            arg_inputs=list(inputs),
-            output_format="exported_program",
-            dynamic_shapes=dynamic_shapes,
-        )
+        torch.export.save(compiled_exported_program, temporary_path)
         os.replace(temporary_path, artifact_path)
     finally:
         if os.path.exists(temporary_path):
