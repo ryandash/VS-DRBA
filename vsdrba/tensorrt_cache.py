@@ -27,7 +27,7 @@ def load_or_compile(
 
     if os.path.isfile(artifact_path) and os.path.getsize(artifact_path) > 0:
         try:
-            loaded = torch.export.load(artifact_path).module().eval()
+            loaded = torch.export.load(artifact_path).module()
             print(f"Loaded serialized TensorRT engine: {label} ({artifact_path})")
             return loaded
         except Exception as exc:
@@ -57,7 +57,7 @@ def load_or_compile(
 
     # Save to a unique sibling path, then publish atomically. A process interrupted
     # during serialization cannot leave a truncated artifact at the final path.
-    temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.ep"
+    temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.pt2"
     try:
         torch.export.save(compiled_exported_program, temporary_path)
         os.replace(temporary_path, artifact_path)
