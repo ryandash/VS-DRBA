@@ -5,7 +5,6 @@ import os
 import sys
 import warnings
 from fractions import Fraction
-from threading import Lock
 from contextlib import contextmanager
 import numpy as np
 import torch
