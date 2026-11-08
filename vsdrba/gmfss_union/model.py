@@ -11,6 +11,7 @@ from .GMFSS import Model
 from .drm import calc_drm_gmfss, calc_drm_rife_auxiliary
 from .utils import load_state_dict, resize
 from ..IFNet_HDv3_v4_25 import IFNet
+from ..tensorrt_cache import load_or_compile
 
 
 class _StrictTensorRTRTXModule(torch.nn.Module):
@@ -40,27 +41,43 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     r"[^A-Za-z0-9_.-]+", "_",
                     torch.cuda.get_device_name(inputs[0].device),
                 )
-                cache_path = None
-                if self.cache_dir is not None:
-                    os.makedirs(self.cache_dir, exist_ok=True)
-                    cache_name = (
-                        self.label + "_" + self.cache_key + "_" + shape_key + "_"
-                        + dtype_key + "_" + device_key + "_trt-"
-                        + str(tensorrt_rtx.__version__) + ".runtime_cache"
-                    )
-                    cache_path = os.path.join(self.cache_dir, cache_name)
+                capability = torch.cuda.get_device_capability(inputs[0].device)
+                version_key = (
+                    "_torch-" + str(torch.__version__).replace("+", "-")
+                    + "_sm-" + str(capability[0]) + str(capability[1])
+                )
+                cache_name = (
+                    self.label + "_" + self.cache_key + "_" + shape_key + "_"
+                    + dtype_key + "_" + device_key + version_key + "_trt-"
+                    + str(tensorrt_rtx.__version__)
+                )
+                artifact_path = (
+                    os.path.join(self.cache_dir, cache_name + ".ts")
+                    if self.cache_dir is not None else None
+                )
+                runtime_cache_path = (
+                    os.path.join(self.cache_dir, cache_name + ".runtime_cache")
+                    if self.cache_dir is not None else None
+                )
 
-                self.compiled = torch_tensorrt.dynamo.compile(
-                    exported,
-                    inputs=list(inputs),
-                    enabled_precisions={torch.float16},
-                    optimization_level=3,
-                    min_block_size=1,
-                    require_full_compilation=True,
-                    pass_through_build_failures=True,
-                    runtime_cache_path=cache_path,
-                    use_python_runtime=True,
-                ).eval()
+                compile_kwargs = {
+                    "enabled_precisions": {torch.float16},
+                    "optimization_level": 3,
+                    "min_block_size": 1,
+                    "require_full_compilation": True,
+                    "pass_through_build_failures": True,
+                    "runtime_cache_path": runtime_cache_path,
+                    # Serialized TorchScript artifacts use the C++ runtime.
+                    "use_python_runtime": False,
+                }
+                if artifact_path is None:
+                    self.compiled = torch_tensorrt.dynamo.compile(
+                        exported, inputs=list(inputs), **compile_kwargs
+                    ).eval()
+                else:
+                    self.compiled = load_or_compile(
+                        exported, inputs, artifact_path, compile_kwargs, self.label
+                    )
             except Exception as exc:
                 raise RuntimeError(
                     f"TensorRT-RTX could not fully compile {self.label}; "
@@ -188,7 +205,7 @@ class GMFSS_UNION:
             print(
                 f"TensorRT-RTX {tensorrt_rtx.__version__} enabled for FeatureNet, "
                 "MetricNet convolution head, FusionNet, GMFlow CNN backbone, "
-                "and RIFE encoder. Runtime JIT caches are persisted per module and input shape. "
+                "and RIFE encoder. Serialized engines are reused per module, shape, runtime, and GPU. "
                 "Full-engine compilation is enforced; unsupported modules stay outside the engine boundary.",
                 file=sys.stderr,
             )
