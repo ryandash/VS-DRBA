@@ -439,6 +439,8 @@ def drba_rife(
 
     frame_cache = {}
     encode_cache = {}
+    # CUDA events track readiness without forcing the CPU to wait for each frame.
+    encode_ready_cache = {}
 
     @torch.inference_mode()
     def encoding(n: int, f: vs.VideoFrame) -> vs.VideoFrame:
@@ -448,17 +450,21 @@ def drba_rife(
             if need_pad:
                 img = F.pad(img, padding)
 
-            enc_f2t_stream.synchronize()
+            input_ready = torch.cuda.Event()
+            input_ready.record(enc_f2t_stream)
 
             frame_cache[n] = img
 
         with enc_stream_lock, torch.cuda.stream(enc_stream):
-
+            # Wait on the transfer stream on the GPU, not on the Python callback.
+            enc_stream.wait_event(input_ready)
             output = encode(img)
 
-            enc_stream.synchronize()
+            encode_ready = torch.cuda.Event()
+            encode_ready.record(enc_stream)
 
             encode_cache[n] = output
+            encode_ready_cache[n] = encode_ready
 
             return f
 
@@ -488,12 +494,17 @@ def drba_rife(
                         del encode_cache[cache_to_delete]
                     if cache_to_delete + 1 in encode_cache:
                         del encode_cache[cache_to_delete + 1]
+                    if cache_to_delete in encode_ready_cache:
+                        del encode_ready_cache[cache_to_delete]
+                    if cache_to_delete + 1 in encode_ready_cache:
+                        del encode_ready_cache[cache_to_delete + 1]
 
             t = n * factor_den % factor_num / factor_num
 
             if t == 0 or (sc and f[0].props.get("_SceneChangeNext")):
                 return f[0]
 
+            cached_encode_events = []
             if Head is not None:
                 if real_n in frame_cache:
                     img0 = frame_cache[real_n]
@@ -521,16 +532,19 @@ def drba_rife(
 
                 if real_n in encode_cache:
                     f0 = encode_cache[real_n]
+                    cached_encode_events.append(encode_ready_cache[real_n])
                 else:
                     f0 = encode(img0)
 
                 if real_n_next in encode_cache:
                     f1 = encode_cache[real_n_next]
+                    cached_encode_events.append(encode_ready_cache[real_n_next])
                 else:
                     f1 = encode(img1)
 
                 if real_n_next_next in encode_cache:
                     f2 = encode_cache[real_n_next_next]
+                    cached_encode_events.append(encode_ready_cache[real_n_next_next])
                 else:
                     f2 = encode(img2)
             else:
@@ -543,9 +557,16 @@ def drba_rife(
                     img1 = F.pad(img1, padding)
                     img2 = F.pad(img2, padding)
 
-            inf_f2t_stream.synchronize()
+            input_ready = torch.cuda.Event()
+            input_ready.record(inf_f2t_stream)
 
         with inf_stream_lock, torch.cuda.stream(inf_stream):
+            # Dependencies are inserted into the GPU queue; the callback thread
+            # does not block while transfers or cached encodes finish.
+            inf_stream.wait_event(input_ready)
+            for encode_ready in cached_encode_events:
+                inf_stream.wait_event(encode_ready)
+
             t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
             if Head is not None:
                 # flo0 -> 0.5 -> 1
@@ -601,9 +622,13 @@ def drba_rife(
             else:
                 output = flownet(img1, img0, drm)
 
-            inf_stream.synchronize()
+            inference_done = torch.cuda.Event()
+            inference_done.record(inf_stream)
 
         with inf_t2f_stream_lock, torch.cuda.stream(inf_t2f_stream):
+            # Keep the output conversion ordered after inference without a
+            # host-side synchronize at the inference boundary.
+            inf_t2f_stream.wait_event(inference_done)
             if need_pad:
                 output = output[:, :, :h, :w]
 
