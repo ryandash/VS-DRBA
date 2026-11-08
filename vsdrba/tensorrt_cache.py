@@ -28,7 +28,15 @@ def load_or_compile(
     if os.path.isfile(artifact_path) and os.path.getsize(artifact_path) > 0:
         try:
             loaded = torch.export.load(artifact_path).module()
-            print(f"Loaded serialized TensorRT engine: {label} ({artifact_path})")
+            # torch.export.load() restores the ExportedProgram on CPU by default.
+            # Match the device used by the live inference inputs so a cache hit
+            # does not silently leave lifted state/parameters in system memory.
+            if inputs and isinstance(inputs[0], torch.Tensor):
+                loaded = loaded.to(device=inputs[0].device)
+            print(
+                f"Loaded serialized TensorRT engine: {label} "
+                f"({artifact_path}) on {inputs[0].device if inputs else 'default device'}"
+            )
             return loaded
         except Exception as exc:
             raise RuntimeError(
