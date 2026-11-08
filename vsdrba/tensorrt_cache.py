@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import uuid
 
@@ -27,15 +28,28 @@ def load_or_compile(
 
     if os.path.isfile(artifact_path) and os.path.getsize(artifact_path) > 0:
         try:
-            loaded = torch.export.load(artifact_path).module()
-            # torch.export.load() restores the ExportedProgram on CPU by default.
-            # Match the device used by the live inference inputs so a cache hit
-            # does not silently leave lifted state/parameters in system memory.
-            if inputs and isinstance(inputs[0], torch.Tensor):
-                loaded = loaded.to(device=inputs[0].device)
+            # Keep the ExportedProgram in a named variable so its CPU-side
+            # state can be released explicitly after the runtime module has
+            # been moved to the inference device.
+            exported_program = torch.export.load(artifact_path)
+            loaded = exported_program.module()
+
+            target_device = (
+                inputs[0].device
+                if inputs and isinstance(inputs[0], torch.Tensor)
+                else None
+            )
+            if target_device is not None:
+                loaded = loaded.to(device=target_device)
+
+            # Drop the archive/ExportedProgram and collect its CPU-side
+            # deserialization objects rather than retaining both copies.
+            del exported_program
+            gc.collect()
+
             print(
                 f"Loaded serialized TensorRT engine: {label} "
-                f"({artifact_path}) on {inputs[0].device if inputs else 'default device'}"
+                f"({artifact_path}) on {target_device or 'default device'}"
             )
             return loaded
         except Exception as exc:
