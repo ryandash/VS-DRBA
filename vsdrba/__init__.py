@@ -75,8 +75,8 @@ def drba_rife(
         trt_workspace_size: int = 0,
         trt_max_aux_streams: int | None = None,
         trt_optimization_level: int | None = None,
-        block0_batch_size: int = 2,
         trt_cache_dir: str = model_dir,
+        block0_batch_size: int = 2,
 ) -> vs.VideoNode:
     """Real-Time Intermediate Flow Estimation for Video Frame Interpolation
 
