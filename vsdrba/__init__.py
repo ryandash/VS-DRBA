@@ -420,20 +420,9 @@ def drba_rife(
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
-    inf_stream = torch.cuda.Stream(device)
-    inf_f2t_stream = torch.cuda.Stream(device)
-    inf_t2f_stream = torch.cuda.Stream(device)
-
-    inf_stream_lock = Lock()
-    inf_f2t_stream_lock = Lock()
-    inf_t2f_stream_lock = Lock()
-
-    if Head is not None:
-        enc_stream = torch.cuda.Stream(device)
-        enc_f2t_stream = torch.cuda.Stream(device)
-
-        enc_stream_lock = Lock()
-        enc_f2t_stream_lock = Lock()
+    # Give each VapourSynth callback its own streams. Shared streams protected by
+    # locks serialized otherwise-independent frame callbacks and limited GPU
+    # occupancy. CUDA events below preserve the required cross-stream ordering.
 
     torch.cuda.current_stream(device).synchronize()
 
@@ -444,7 +433,10 @@ def drba_rife(
 
     @torch.inference_mode()
     def encoding(n: int, f: vs.VideoFrame) -> vs.VideoFrame:
-        with enc_f2t_stream_lock, torch.cuda.stream(enc_f2t_stream):
+        enc_f2t_stream = torch.cuda.Stream(device)
+        enc_stream = torch.cuda.Stream(device)
+
+        with torch.cuda.stream(enc_f2t_stream):
             img = frame_to_tensor(f, device)
 
             if need_pad:
@@ -455,7 +447,7 @@ def drba_rife(
 
             frame_cache[n] = img
 
-        with enc_stream_lock, torch.cuda.stream(enc_stream):
+        with torch.cuda.stream(enc_stream):
             # Wait on the transfer stream on the GPU, not on the Python callback.
             enc_stream.wait_event(input_ready)
             output = encode(img)
@@ -476,7 +468,11 @@ def drba_rife(
 
     @torch.inference_mode()
     def inference(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
-        with inf_f2t_stream_lock, torch.cuda.stream(inf_f2t_stream):
+        inf_stream = torch.cuda.Stream(device)
+        inf_f2t_stream = torch.cuda.Stream(device)
+        inf_t2f_stream = torch.cuda.Stream(device)
+
+        with torch.cuda.stream(inf_f2t_stream):
             if Head is not None:
                 real_n = n * factor_den // factor_num
                 real_n_next = min(real_n + 1, clip.num_frames - 1)
@@ -560,7 +556,7 @@ def drba_rife(
             input_ready = torch.cuda.Event()
             input_ready.record(inf_f2t_stream)
 
-        with inf_stream_lock, torch.cuda.stream(inf_stream):
+        with torch.cuda.stream(inf_stream):
             # Dependencies are inserted into the GPU queue; the callback thread
             # does not block while transfers or cached encodes finish.
             inf_stream.wait_event(input_ready)
@@ -625,7 +621,7 @@ def drba_rife(
             inference_done = torch.cuda.Event()
             inference_done.record(inf_stream)
 
-        with inf_t2f_stream_lock, torch.cuda.stream(inf_t2f_stream):
+        with torch.cuda.stream(inf_t2f_stream):
             # Keep the output conversion ordered after inference without a
             # host-side synchronize at the inference boundary.
             inf_t2f_stream.wait_event(inference_done)
