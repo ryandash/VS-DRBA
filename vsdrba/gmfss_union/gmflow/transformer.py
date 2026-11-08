@@ -139,6 +139,9 @@ class TransformerLayer(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        # Inference weights are immutable; cache the fused K/V matrix after
+        # checkpoint loading and device/dtype conversion.
+        self._kv_weight_cache = None
 
         self.merge = nn.Linear(d_model, d_model, bias=False)
 
@@ -171,7 +174,18 @@ class TransformerLayer(nn.Module):
         # Key and value always come from the same target tensor. Fuse their
         # two projections into one wider GEMM to reduce CUDA launch overhead.
         # Concatenating the existing weights preserves checkpoint compatibility.
-        key_value_weight = torch.cat((self.k_proj.weight, self.v_proj.weight), dim=0)
+        key_value_weight = self._kv_weight_cache
+        if (
+            self.training
+            or key_value_weight is None
+            or key_value_weight.device != self.k_proj.weight.device
+            or key_value_weight.dtype != self.k_proj.weight.dtype
+        ):
+            key_value_weight = torch.cat(
+                (self.k_proj.weight, self.v_proj.weight), dim=0
+            )
+            if not self.training:
+                self._kv_weight_cache = key_value_weight
         key, value = F.linear(target, key_value_weight).chunk(2, dim=-1)
 
         if self.attention_type == 'swin' and attn_num_splits > 1:
