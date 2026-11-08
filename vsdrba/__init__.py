@@ -273,9 +273,9 @@ def drba_rife(
             + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
             + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
         )
-        flownet_artifact = os.path.join(cache_dir, cache_name + ".flownet.ts")
-        block0_artifact = os.path.join(cache_dir, cache_name + ".block0.ts")
-        encode_artifact = os.path.join(cache_dir, cache_name + ".encode.ts")
+        flownet_artifact = os.path.join(cache_dir, cache_name + ".flownet.ep")
+        block0_artifact = os.path.join(cache_dir, cache_name + ".block0.ep")
+        encode_artifact = os.path.join(cache_dir, cache_name + ".encode.ep")
         flownet_runtime_cache = os.path.join(cache_dir, cache_name + ".flownet.runtime_cache")
         block0_runtime_cache = os.path.join(cache_dir, cache_name + ".block0.runtime_cache")
         encode_runtime_cache = os.path.join(cache_dir, cache_name + ".encode.runtime_cache")
@@ -375,7 +375,7 @@ def drba_rife(
                 "optimization_level": trt_optimization_level,
                 "use_explicit_typing": True,
                 "runtime_cache_path": flownet_runtime_cache,
-                "use_python_runtime": False,
+                "use_python_runtime": True,
             },
             "RIFE-FlowNet",
             dynamic_shapes=flownet_dynamic_shapes,
