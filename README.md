@@ -109,4 +109,6 @@ The `perf/block0-batched-inference` branch adds an optional `block0_batch_size` 
 
 This is an experimental performance path, not a guaranteed speedup. Benchmark both values on the same source and compare processing FPS, GPU power, VRAM, and output quality. The first TensorRT run compiles the engine and can take substantially longer. The runtime cache uses a batch-specific filename.
 
+**Runtime-cache persistence:** With `trt=True`, VS-DRBA now releases its TensorRT-compiled modules and forces Python garbage collection when VapourSynth evaluates the final output frame. Torch-TensorRT-RTX 2.11 writes each `runtime_cache_path` cache during engine/module cleanup, so the cache flush happens at end-of-clip processing rather than waiting for `vspipe` or Python to exit. This requires the consumer to process the clip through its final frame; aborting or stopping early cannot trigger the end-of-clip flush. A `RuntimeWarning` is emitted if expected cache files are still missing after cleanup.
+
 A Windows VapourSynth example is provided at [examples/rtx4090_1080p_2x.vpy](examples/rtx4090_1080p_2x.vpy). Edit the repository, input, and cache paths before running it. The example uses L-SMASH Works as its source plugin.
