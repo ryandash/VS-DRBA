@@ -12,11 +12,13 @@ def _runtime_module(engine_bytes, inputs, label):
     import torch_tensorrt
 
     device = inputs[0].device
+    # Runtime settings describe the target device. Precision is already fixed
+    # in the serialized engine and is not a CompilationSettings runtime option
+    # in the installed TensorRT-RTX 2.11 API.
     settings = torch_tensorrt.dynamo.CompilationSettings(
         device=torch_tensorrt.Device(
             gpu_id=device.index if device.index is not None else torch.cuda.current_device()
-        ),
-        enabled_precisions={inputs[0].dtype},
+        )
     )
     # The runtime module needs binding names to connect its PyTorch tensor
     # arguments to TensorRT I/O tensors. Discover them from the raw plan.
