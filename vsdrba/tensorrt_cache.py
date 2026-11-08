@@ -16,7 +16,7 @@ def load_or_compile(
 ):
     """Load a serialized TensorRT module, or compile and atomically save it.
 
-    Artifacts use TorchScript so they can be loaded in a fresh Python process.
+    Artifacts use torch.export.ExportedProgram so they can be loaded in a fresh Python process.
     Runtime JIT cache paths remain separate and are passed through compile_kwargs.
     """
     import torch
@@ -27,7 +27,7 @@ def load_or_compile(
 
     if os.path.isfile(artifact_path) and os.path.getsize(artifact_path) > 0:
         try:
-            loaded = torch_tensorrt.load(artifact_path).module().eval()
+            loaded = torch.export.load(artifact_path).module().eval()
             print(f"Loaded serialized TensorRT engine: {label} ({artifact_path})")
             return loaded
         except Exception as exc:
@@ -48,13 +48,14 @@ def load_or_compile(
 
     # Save to a unique sibling path, then publish atomically. A process interrupted
     # during serialization cannot leave a truncated artifact at the final path.
-    temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.tmp"
+    temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.ep"
     try:
         torch_tensorrt.save(
             compiled,
             temporary_path,
             arg_inputs=list(inputs),
-            output_format="torchscript",
+            output_format="exported_program",
+            dynamic_shapes=dynamic_shapes,
         )
         os.replace(temporary_path, artifact_path)
     finally:
