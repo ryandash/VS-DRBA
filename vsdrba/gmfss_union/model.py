@@ -31,7 +31,6 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                 import tensorrt_rtx
                 import torch_tensorrt
 
-                exported = torch.export.export(self.module, tuple(inputs))
                 shape_key = "_".join(
                     "x".join(str(int(dim)) for dim in tensor.shape)
                     for tensor in inputs
@@ -76,7 +75,7 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     ).eval()
                 else:
                     self.compiled = load_or_compile(
-                        exported, inputs, artifact_path, compile_kwargs, self.label
+                        self.module, inputs, artifact_path, compile_kwargs, self.label
                     )
             except Exception as exc:
                 raise RuntimeError(
