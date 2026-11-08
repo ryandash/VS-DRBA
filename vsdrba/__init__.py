@@ -117,8 +117,9 @@ def drba_rife(
                                     Supported values are 1 (baseline) and 2 (batched execution).
     :param trt_cache_dir:           Directory for TensorRT-RTX runtime JIT caches. Cached kernels are reused on
                                     subsequent runs when the model, input shape, precision, GPU, and runtime match.
-                                    With TensorRT enabled, caches are explicitly flushed when the final output frame
-                                    is evaluated; this does not depend on vspipe shutting down Python cleanly.
+                                    With TensorRT-RTX 2.11, each engine is warmed up before video processing, then
+                                    its runtime cache is flushed by releasing the warm-up module. Fresh modules are
+                                    compiled afterward and used for the actual clip.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("rife: this is not a clip")
@@ -374,54 +375,11 @@ def drba_rife(
 
         flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
 
-        flownet = torch_tensorrt.dynamo.compile(
-            flownet_program,
-            flownet_inputs,
-            device=device,
-            debug=trt_debug,
-            num_avg_timing_iters=4,
-            workspace_size=trt_workspace_size,
-            min_block_size=1,
-            require_full_compilation=True,
-            pass_through_build_failures=True,
-            max_aux_streams=trt_max_aux_streams,
-            optimization_level=trt_optimization_level,
-            use_explicit_typing=True,
-            runtime_cache_path=flownet_runtime_cache,
-            use_python_runtime=True,
-        )
-
-        block0_program = torch.export.export(
-            block0, block0_inputs, dynamic_shapes=flownet_dynamic_shapes
-        )
-
-        block0 = torch_tensorrt.dynamo.compile(
-            block0_program,
-            block0_inputs,
-            device=device,
-            debug=trt_debug,
-            num_avg_timing_iters=4,
-            workspace_size=trt_workspace_size,
-            min_block_size=1,
-            require_full_compilation=True,
-            pass_through_build_failures=True,
-            max_aux_streams=trt_max_aux_streams,
-            optimization_level=trt_optimization_level,
-            use_explicit_typing=True,
-            runtime_cache_path=block0_runtime_cache,
-            use_python_runtime=True,
-        )
-
-        if encode is not None:
-            encode_program = torch.export.export(
-                encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
-            )
-
-            encode = torch_tensorrt.dynamo.compile(
-                encode_program,
-                encode_inputs,
+        def compile_modules():
+            compiled_flownet = torch_tensorrt.dynamo.compile(
+                flownet_program,
+                flownet_inputs,
                 device=device,
-                enabled_precisions={dtype},
                 debug=trt_debug,
                 num_avg_timing_iters=4,
                 workspace_size=trt_workspace_size,
@@ -430,47 +388,91 @@ def drba_rife(
                 pass_through_build_failures=True,
                 max_aux_streams=trt_max_aux_streams,
                 optimization_level=trt_optimization_level,
-                runtime_cache_path=encode_runtime_cache,
+                use_explicit_typing=True,
+                runtime_cache_path=flownet_runtime_cache,
                 use_python_runtime=True,
             )
 
+            compiled_block0 = torch_tensorrt.dynamo.compile(
+                block0_program,
+                block0_inputs,
+                device=device,
+                debug=trt_debug,
+                num_avg_timing_iters=4,
+                workspace_size=trt_workspace_size,
+                min_block_size=1,
+                require_full_compilation=True,
+                pass_through_build_failures=True,
+                max_aux_streams=trt_max_aux_streams,
+                optimization_level=trt_optimization_level,
+                use_explicit_typing=True,
+                runtime_cache_path=block0_runtime_cache,
+                use_python_runtime=True,
+            )
 
-    else:
-        flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
+            compiled_encode = None
+            if encode_program is not None:
+                compiled_encode = torch_tensorrt.dynamo.compile(
+                    encode_program,
+                    encode_inputs,
+                    device=device,
+                    enabled_precisions={dtype},
+                    debug=trt_debug,
+                    num_avg_timing_iters=4,
+                    workspace_size=trt_workspace_size,
+                    min_block_size=1,
+                    require_full_compilation=True,
+                    pass_through_build_failures=True,
+                    max_aux_streams=trt_max_aux_streams,
+                    optimization_level=trt_optimization_level,
+                    runtime_cache_path=encode_runtime_cache,
+                    use_python_runtime=True,
+                )
 
-    # Keep the model references in one mutable holder. The VapourSynth callbacks
-    # close over this holder rather than the modules directly, allowing the final
-    # output-frame callback to release the compiled modules deterministically.
-    module_refs = {"flownet": flownet, "encode": encode, "block0": block0}
-    del flownet, encode, block0
+            return compiled_flownet, compiled_encode, compiled_block0
 
-    cache_save_state = {"last_frame": None, "saved": False}
+        flownet, encode, block0 = compile_modules()
 
-    def save_runtime_caches_at_end(n: int) -> None:
-        if not trt or n != cache_save_state["last_frame"] or cache_save_state["saved"]:
-            return
+        # TensorRT-RTX 2.11 persists runtime JIT caches when compiled modules
+        # are destroyed. Warm up every engine with representative static-shape
+        # inputs, destroy this first set of modules to flush the caches, then
+        # compile fresh modules which will load those populated cache files.
+        with torch.inference_mode():
+            if encode is not None:
+                warmup_output = encode(*encode_inputs)
+                del warmup_output
 
-        # Ensure no inference/encoding work is still using the engines before
-        # releasing them. Torch-TensorRT 2.11 persists runtime_cache_path caches
-        # from the engine/module cleanup path.
+            warmup_output = block0(*block0_inputs)
+            del warmup_output
+
+            warmup_output = flownet(*flownet_inputs)
+            del warmup_output
+
         torch.cuda.synchronize(device)
-        module_refs.clear()
+        del flownet, encode, block0
         gc.collect()
-        cache_save_state["saved"] = True
 
         expected_caches = [flownet_runtime_cache, block0_runtime_cache]
         if Head is not None:
             expected_caches.append(encode_runtime_cache)
-        missing = [
+        missing_caches = [
             path for path in expected_caches
             if not os.path.isfile(path) or os.path.getsize(path) == 0
         ]
-        if missing:
+        if missing_caches:
             warnings.warn(
-                "TensorRT runtime cache cleanup completed, but these cache files were not created: "
-                + ", ".join(missing),
+                "TensorRT-RTX warm-up completed, but runtime cache files were not "
+                "created or are empty: " + ", ".join(missing_caches),
                 RuntimeWarning,
             )
+
+        # These are the long-lived modules used by VapourSynth. They load the
+        # runtime caches written by the warm-up modules above.
+        flownet, encode, block0 = compile_modules()
+
+
+    else:
+        flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
     inf_stream = torch.cuda.Stream(device)
     inf_f2t_stream = torch.cuda.Stream(device)
@@ -506,7 +508,7 @@ def drba_rife(
 
         with enc_stream_lock, torch.cuda.stream(enc_stream):
 
-            output = module_refs["encode"](img)
+            output = encode(img)
 
             enc_stream.synchronize()
 
@@ -544,7 +546,6 @@ def drba_rife(
             t = n * factor_den % factor_num / factor_num
 
             if t == 0 or (sc and f[0].props.get("_SceneChangeNext")):
-                save_runtime_caches_at_end(n)
                 return f[0]
 
             if Head is not None:
@@ -610,7 +611,7 @@ def drba_rife(
                 if Head is not None:
                     batch_f0 = torch.cat((f1, f1), dim=0)
                     batch_f1 = torch.cat((f0, f2), dim=0)
-                    batch_flow = module_refs["block0"](
+                    batch_flow = block0(
                         batch_img0, batch_img1, batch_t, batch_f0, batch_f1
                     )[:, :2]
                 else:
@@ -665,7 +666,7 @@ def drba_rife(
                                        align_corners=False)
 
             if Head is not None:
-                output = module_refs["flownet"](img1, img0, drm, f1, f0)
+                output = flownet(img1, img0, drm, f1, f0)
             else:
                 output = module_refs["flownet"](img1, img0, drm)
 
@@ -676,7 +677,6 @@ def drba_rife(
                 output = output[:, :, :h, :w]
 
             result = tensor_to_frame(output, f[0].copy(), inf_t2f_stream)
-            save_runtime_caches_at_end(n)
             return result
 
     if Head is not None:
@@ -693,8 +693,6 @@ def drba_rife(
         clip0 = clip0[::factor_den]
         clip1 = clip1[::factor_den]
         clip2 = clip2[::factor_den]
-
-    cache_save_state["last_frame"] = clip0.num_frames - 1
 
     return clip0.std.FrameEval(lambda n: clip0.std.ModifyFrame([clip0, clip1, clip2], inference),
                                clip_src=[clip0, clip1, clip2])
