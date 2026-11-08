@@ -20,7 +20,7 @@ def _runtime_module(engine_bytes, inputs, label):
     )
     # The runtime module needs binding names to connect its PyTorch tensor
     # arguments to TensorRT I/O tensors. Discover them from the raw plan.
-    import tensorrt as trt
+    import tensorrt_rtx as trt
 
     runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
     engine = runtime.deserialize_cuda_engine(engine_bytes)
