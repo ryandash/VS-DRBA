@@ -1,10 +1,30 @@
-"""Persistent AOT serialization helpers for Torch-TensorRT-RTX modules."""
+"""Raw TensorRT engine serialization helpers for Torch-TensorRT-RTX."""
 
 from __future__ import annotations
 
 import gc
 import os
 import uuid
+
+
+def _runtime_module(engine_bytes, inputs, label):
+    """Wrap raw engine bytes in Torch-TensorRT's lightweight Python runtime."""
+    import torch_tensorrt
+
+    device = inputs[0].device
+    settings = torch_tensorrt.dynamo.CompilationSettings(
+        device=torch_tensorrt.Device(
+            gpu_id=device.index if device.index is not None else torch.cuda.current_device()
+        ),
+        enabled_precisions={inputs[0].dtype},
+    )
+    runtime_module = torch_tensorrt.runtime.PythonTorchTensorRTModule(
+        serialized_engine=engine_bytes,
+        name=label,
+        settings=settings,
+    )
+    print(f"Loaded raw TensorRT engine: {label} on {device}")
+    return runtime_module
 
 
 def load_or_compile(
@@ -15,10 +35,12 @@ def load_or_compile(
     label: str,
     dynamic_shapes=None,
 ):
-    """Load a serialized TensorRT module, or compile and atomically save it.
+    """Load a standalone .engine file or build and serialize one.
 
-    Artifacts use torch.export.ExportedProgram so they can be loaded in a fresh Python process.
-    Runtime JIT cache paths remain separate and are passed through compile_kwargs.
+    The artifact contains raw TensorRT engine bytes, not a PyTorch ExportedProgram.
+    PyTorch tensors are still used at the VapourSynth integration boundary; the
+    runtime module only wraps TensorRT execution and does not retain the source
+    neural-network module or its ExportedProgram.
     """
     import torch
     import torch_tensorrt
@@ -28,63 +50,69 @@ def load_or_compile(
 
     if os.path.isfile(artifact_path) and os.path.getsize(artifact_path) > 0:
         try:
-            # Keep the ExportedProgram in a named variable so its CPU-side
-            # state can be released explicitly after the runtime module has
-            # been moved to the inference device.
-            exported_program = torch.export.load(artifact_path)
-            loaded = exported_program.module()
-
-            target_device = (
-                inputs[0].device
-                if inputs and isinstance(inputs[0], torch.Tensor)
-                else None
-            )
-            if target_device is not None:
-                loaded = loaded.to(device=target_device)
-
-            # Drop the archive/ExportedProgram and collect its CPU-side
-            # deserialization objects rather than retaining both copies.
-            del exported_program
+            with open(artifact_path, "rb") as engine_file:
+                engine_bytes = engine_file.read()
+            runtime_module = _runtime_module(engine_bytes, inputs, label)
+            del engine_bytes
             gc.collect()
-
-            print(
-                f"Loaded serialized TensorRT engine: {label} "
-                f"({artifact_path}) on {target_device or 'default device'}"
-            )
-            return loaded
+            return runtime_module
         except Exception as exc:
             raise RuntimeError(
                 f"Could not load serialized TensorRT engine for {label} at "
                 f"{artifact_path}. Remove the incompatible artifact to rebuild it: {exc}"
             ) from exc
 
-    print(f"Building TensorRT engine for {label}; this is a one-time build for this cache key.")
+    print(f"Building standalone TensorRT engine for {label}; this is a one-time build.")
     exported_program = torch.export.export(
         module, tuple(inputs), dynamic_shapes=dynamic_shapes
     )
-    compiled = torch_tensorrt.dynamo.compile(
-        exported_program,
-        inputs=list(inputs),
-        **compile_kwargs,
-    ).eval()
 
-    # TensorRT-RTX may return a plain nn.Module when use_python_runtime=True.
-    # torch_tensorrt.save() does not accept that wrapper directly, so capture
-    # the compiled module as an ExportedProgram first. This keeps the embedded
-    # TensorRT custom ops in the serialized graph rather than saving the
-    # original, uncompiled model.
-    compiled_exported_program = torch.export.export(
-        compiled, tuple(inputs), dynamic_shapes=dynamic_shapes
+    # This API returns the actual serialized ICudaEngine bytes. Unlike
+    # dynamo.compile(), it does not produce a PyTorch GraphModule or an
+    # ExportedProgram wrapper. Full compilation is required so no PyTorch
+    # fallback subgraphs are silently omitted from the standalone engine.
+    converter_kwargs = {
+        "inputs": list(inputs),
+        "enabled_precisions": {inputs[0].dtype},
+        "device": compile_kwargs.get("device", inputs[0].device),
+        "num_avg_timing_iters": compile_kwargs.get("num_avg_timing_iters", 1),
+        "workspace_size": compile_kwargs.get("workspace_size", 0),
+        "min_block_size": compile_kwargs.get("min_block_size", 1),
+        "require_full_compilation": True,
+        "pass_through_build_failures": compile_kwargs.get(
+            "pass_through_build_failures", True
+        ),
+        "max_aux_streams": compile_kwargs.get("max_aux_streams"),
+        "optimization_level": compile_kwargs.get("optimization_level"),
+        "use_explicit_typing": compile_kwargs.get("use_explicit_typing", True),
+        "runtime_cache_path": compile_kwargs.get("runtime_cache_path"),
+    }
+    engine_bytes = (
+        torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine(
+            exported_program, **converter_kwargs
+        )
     )
+    del exported_program
+    gc.collect()
 
-    # Save to a unique sibling path, then publish atomically. A process interrupted
-    # during serialization cannot leave a truncated artifact at the final path.
-    temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.pt2"
+    if not isinstance(engine_bytes, (bytes, bytearray, memoryview)):
+        raise TypeError(
+            "Torch-TensorRT raw engine converter did not return serialized bytes; "
+            f"got {type(engine_bytes).__name__}"
+        )
+
+    temporary_path = artifact_path + f".{os.getpid()}-{uuid.uuid4().hex}.tmp"
     try:
-        torch.export.save(compiled_exported_program, temporary_path)
+        with open(temporary_path, "wb") as engine_file:
+            engine_file.write(engine_bytes)
+            engine_file.flush()
+            os.fsync(engine_file.fileno())
         os.replace(temporary_path, artifact_path)
     finally:
         if os.path.exists(temporary_path):
             os.remove(temporary_path)
 
-    return compiled
+    runtime_module = _runtime_module(engine_bytes, inputs, label)
+    del engine_bytes
+    gc.collect()
+    return runtime_module
