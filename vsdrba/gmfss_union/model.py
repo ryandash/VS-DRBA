@@ -70,6 +70,7 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     "use_python_runtime": False,
                 }
                 if artifact_path is None:
+                    exported = torch.export.export(self.module, tuple(inputs))
                     self.compiled = torch_tensorrt.dynamo.compile(
                         exported, inputs=list(inputs), **compile_kwargs
                     ).eval()
