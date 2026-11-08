@@ -7,17 +7,19 @@ import uuid
 
 
 def load_or_compile(
-    exported_program,
+    module,
     inputs,
     artifact_path: str,
     compile_kwargs: dict,
     label: str,
+    dynamic_shapes=None,
 ):
     """Load a serialized TensorRT module, or compile and atomically save it.
 
     Artifacts use TorchScript so they can be loaded in a fresh Python process.
     Runtime JIT cache paths remain separate and are passed through compile_kwargs.
     """
+    import torch
     import torch_tensorrt
 
     artifact_path = os.path.realpath(os.path.expanduser(artifact_path))
@@ -35,6 +37,9 @@ def load_or_compile(
             ) from exc
 
     print(f"Building TensorRT engine for {label}; this is a one-time build for this cache key.")
+    exported_program = torch.export.export(
+        module, tuple(inputs), dynamic_shapes=dynamic_shapes
+    )
     compiled = torch_tensorrt.dynamo.compile(
         exported_program,
         inputs=list(inputs),
