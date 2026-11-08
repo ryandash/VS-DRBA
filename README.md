@@ -98,3 +98,15 @@ python -m vsdrba.verify_tensorrt
 ```
 
 The smoke test rejects standard TensorRT distributions and fails if TensorRT-RTX cannot compile or execute its engine. For GMFSS Union, enable `trt=True`; compilation failures are surfaced rather than silently disabling acceleration. The deliberately uncompiled warping/DRM/orchestration operations remain PyTorch operations by design.
+
+
+## Experimental batched RIFE 4.25 block0 inference
+
+The `perf/block0-batched-inference` branch adds an optional `block0_batch_size` argument to `drba_rife`:
+
+- `block0_batch_size=1`: original behavior; two sequential `block0` calls.
+- `block0_batch_size=2`: concatenates the two independent half-time flow estimates into one batch-2 call. TensorRT compiles a matching batch-2 `block0` engine; the main `flownet` and `encode` engines remain batch 1.
+
+This is an experimental performance path, not a guaranteed speedup. Benchmark both values on the same source and compare processing FPS, GPU power, VRAM, and output quality. The first TensorRT run compiles the engine and can take substantially longer. The runtime cache uses a batch-specific filename.
+
+A Windows VapourSynth example is provided at [examples/rtx4090_1080p_2x.vpy](examples/rtx4090_1080p_2x.vpy). Edit the repository, input, and cache paths before running it. The example uses L-SMASH Works as its source plugin.
