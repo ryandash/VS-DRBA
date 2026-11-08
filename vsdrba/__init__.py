@@ -461,6 +461,7 @@ def drba_rife(
         torch.cuda.synchronize(device)
         del flownet, encode, block0
         gc.collect()
+        torch.cuda.empty_cache()
 
         expected_caches = [flownet_runtime_cache, block0_runtime_cache]
         if Head is not None:
