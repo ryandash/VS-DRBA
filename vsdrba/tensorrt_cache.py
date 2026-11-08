@@ -18,11 +18,35 @@ def _runtime_module(engine_bytes, inputs, label):
         ),
         enabled_precisions={inputs[0].dtype},
     )
+    # The runtime module needs binding names to connect its PyTorch tensor
+    # arguments to TensorRT I/O tensors. Discover them from the raw plan.
+    import tensorrt as trt
+
+    runtime = trt.Runtime(trt.Logger(trt.Logger.WARNING))
+    engine = runtime.deserialize_cuda_engine(engine_bytes)
+    if engine is None:
+        raise RuntimeError(f"TensorRT could not deserialize the engine for {label}")
+    input_names = []
+    output_names = []
+    for index in range(engine.num_io_tensors):
+        tensor_name = engine.get_tensor_name(index)
+        if engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT:
+            input_names.append(tensor_name)
+        else:
+            output_names.append(tensor_name)
+    del engine, runtime
+
     runtime_module = torch_tensorrt.runtime.PythonTorchTensorRTModule(
         serialized_engine=engine_bytes,
+        input_binding_names=input_names,
+        output_binding_names=output_names,
         name=label,
         settings=settings,
     )
+    # PythonTorchTensorRTModule retains the serialized host blob for its own
+    # state_dict/deepcopy support. This plugin does not serialize the runtime
+    # module, so release that duplicate after the engine/context are created.
+    runtime_module.serialized_engine = None
     print(f"Loaded raw TensorRT engine: {label} on {device}")
     return runtime_module
 
