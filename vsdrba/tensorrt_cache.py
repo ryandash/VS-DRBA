@@ -38,17 +38,37 @@ def _runtime_module(engine_bytes, inputs, label):
             output_names.append(tensor_name)
     del engine, runtime
 
-    runtime_module = torch_tensorrt.runtime.PythonTorchTensorRTModule(
+    # Torch-TensorRT releases expose different names for this runtime wrapper.
+    # The standard package uses PythonTorchTensorRTModule; the RTX build in
+    # some Windows distributions exposes TorchTensorRTModule instead.
+    runtime_namespace = torch_tensorrt.runtime
+    runtime_class = getattr(runtime_namespace, "PythonTorchTensorRTModule", None)
+    if runtime_class is None:
+        runtime_class = getattr(runtime_namespace, "TorchTensorRTModule", None)
+    if runtime_class is None:
+        available = [
+            name for name in dir(runtime_namespace)
+            if "TensorRTModule" in name
+        ]
+        raise RuntimeError(
+            "This Torch-TensorRT installation exposes no supported TensorRT "
+            f"runtime module. Available candidates: {available}"
+        )
+
+    runtime_module = runtime_class(
         serialized_engine=engine_bytes,
         input_binding_names=input_names,
         output_binding_names=output_names,
         name=label,
         settings=settings,
     )
-    # PythonTorchTensorRTModule retains the serialized host blob for its own
-    # state_dict/deepcopy support. This plugin does not serialize the runtime
-    # module, so release that duplicate after the engine/context are created.
-    runtime_module.serialized_engine = None
+    # Once the runtime has created its engine object, release the duplicate
+    # serialized host buffer if this implementation exposes it. Do not clear
+    # it before engine initialization, since lazy runtime variants need it.
+    if getattr(runtime_module, "engine", None) is not None and hasattr(
+        runtime_module, "serialized_engine"
+    ):
+        runtime_module.serialized_engine = None
     print(f"Loaded raw TensorRT engine: {label} on {device}")
     return runtime_module
 
