@@ -14,6 +14,7 @@ import vapoursynth as vs
 from .__main__ import download_model
 from torch._decomp import get_decompositions
 from .softsplat.softsplat_torch import softsplat as fwarp
+from .tensorrt_cache import load_or_compile
 
 try:
     import cupy
@@ -110,8 +111,8 @@ def drba_rife(
     :param trt_optimization_level:  Builder optimization level. Higher level allows TensorRT to spend more building time
                                     for more optimization options. Valid values include integers from 0 to the maximum
                                     optimization level, which is currently 5. (default is 3)
-    :param trt_cache_dir:           Directory for TensorRT-RTX runtime JIT caches. Cached kernels are reused on
-                                    subsequent runs when the model, input shape, precision, GPU, and runtime match.
+    :param trt_cache_dir:           Directory for serialized TensorRT engines and their runtime JIT caches. AOT
+                                    engines are loaded on subsequent runs when the model, shape, precision, and runtime match.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("rife: this is not a clip")
@@ -265,11 +266,16 @@ def drba_rife(
             + f"_scale-{scale}"
             + f"_ensemble-{ensemble}"
             + f"_{torch.cuda.get_device_name(device)}"
+            + f"_torch-{str(torch.__version__).replace(chr(43), chr(45))}"
+            + f"_sm-{torch.cuda.get_device_capability(device)[0]}{torch.cuda.get_device_capability(device)[1]}"
             + f"_trt-{tensorrt.__version__}"
             + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
             + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
             + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
         )
+        flownet_artifact = os.path.join(cache_dir, cache_name + ".flownet.ts")
+        block0_artifact = os.path.join(cache_dir, cache_name + ".block0.ts")
+        encode_artifact = os.path.join(cache_dir, cache_name + ".encode.ts")
         flownet_runtime_cache = os.path.join(cache_dir, cache_name + ".flownet.runtime_cache")
         block0_runtime_cache = os.path.join(cache_dir, cache_name + ".block0.runtime_cache")
         encode_runtime_cache = os.path.join(cache_dir, cache_name + ".encode.runtime_cache")
@@ -355,42 +361,50 @@ def drba_rife(
 
         flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
 
-        flownet = torch_tensorrt.dynamo.compile(
+        flownet = load_or_compile(
             flownet_program,
             flownet_inputs,
-            device=device,
-            debug=trt_debug,
-            num_avg_timing_iters=4,
-            workspace_size=trt_workspace_size,
-            min_block_size=1,
-            require_full_compilation=True,
-            pass_through_build_failures=True,
-            max_aux_streams=trt_max_aux_streams,
-            optimization_level=trt_optimization_level,
-            use_explicit_typing=True,
-            runtime_cache_path=flownet_runtime_cache,
-            use_python_runtime=True,
+            flownet_artifact,
+            {
+                "device": device,
+                "debug": trt_debug,
+                "num_avg_timing_iters": 4,
+                "workspace_size": trt_workspace_size,
+                "min_block_size": 1,
+                "require_full_compilation": True,
+                "pass_through_build_failures": True,
+                "max_aux_streams": trt_max_aux_streams,
+                "optimization_level": trt_optimization_level,
+                "use_explicit_typing": True,
+                "runtime_cache_path": flownet_runtime_cache,
+                "use_python_runtime": False,
+            },
+            "RIFE-FlowNet",
         )
 
         block0_program = torch.export.export(
             block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
         )
 
-        block0 = torch_tensorrt.dynamo.compile(
+        block0 = load_or_compile(
             block0_program,
             flownet_inputs,
-            device=device,
-            debug=trt_debug,
-            num_avg_timing_iters=4,
-            workspace_size=trt_workspace_size,
-            min_block_size=1,
-            require_full_compilation=True,
-            pass_through_build_failures=True,
-            max_aux_streams=trt_max_aux_streams,
-            optimization_level=trt_optimization_level,
-            use_explicit_typing=True,
-            runtime_cache_path=block0_runtime_cache,
-            use_python_runtime=True,
+            block0_artifact,
+            {
+                "device": device,
+                "debug": trt_debug,
+                "num_avg_timing_iters": 4,
+                "workspace_size": trt_workspace_size,
+                "min_block_size": 1,
+                "require_full_compilation": True,
+                "pass_through_build_failures": True,
+                "max_aux_streams": trt_max_aux_streams,
+                "optimization_level": trt_optimization_level,
+                "use_explicit_typing": True,
+                "runtime_cache_path": block0_runtime_cache,
+                "use_python_runtime": False,
+            },
+            "RIFE-Block0",
         )
 
         if encode is not None:
@@ -398,21 +412,25 @@ def drba_rife(
                 encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
             )
 
-            encode = torch_tensorrt.dynamo.compile(
+            encode = load_or_compile(
                 encode_program,
                 encode_inputs,
-                device=device,
-                enabled_precisions={dtype},
-                debug=trt_debug,
-                num_avg_timing_iters=4,
-                workspace_size=trt_workspace_size,
-                min_block_size=1,
-                require_full_compilation=True,
-                pass_through_build_failures=True,
-                max_aux_streams=trt_max_aux_streams,
-                optimization_level=trt_optimization_level,
-                runtime_cache_path=encode_runtime_cache,
-                use_python_runtime=True,
+                encode_artifact,
+                {
+                    "device": device,
+                    "enabled_precisions": {dtype},
+                    "debug": trt_debug,
+                    "num_avg_timing_iters": 4,
+                    "workspace_size": trt_workspace_size,
+                    "min_block_size": 1,
+                    "require_full_compilation": True,
+                    "pass_through_build_failures": True,
+                    "max_aux_streams": trt_max_aux_streams,
+                    "optimization_level": trt_optimization_level,
+                    "runtime_cache_path": encode_runtime_cache,
+                    "use_python_runtime": False,
+                },
+                "RIFE-Encoder",
             )
 
 
