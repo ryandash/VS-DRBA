@@ -266,7 +266,7 @@ def drba_rife(
             + f"_scale-{scale}"
             + f"_ensemble-{ensemble}"
             + f"_{torch.cuda.get_device_name(device)}"
-            + f"_torch-{str(torch.__version__).replace(chr(43), chr(45))}"
+            + f"_torch-{str(torch.__version__).replace("+", "-")}"
             + f"_sm-{torch.cuda.get_device_capability(device)[0]}{torch.cuda.get_device_capability(device)[1]}"
             + f"_trt-{tensorrt.__version__}"
             + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
@@ -359,10 +359,8 @@ def drba_rife(
                     "timestep": {2: dim_height, 3: dim_width},
                 }
 
-        flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
-
         flownet = load_or_compile(
-            flownet_program,
+            flownet,
             flownet_inputs,
             flownet_artifact,
             {
@@ -380,14 +378,11 @@ def drba_rife(
                 "use_python_runtime": False,
             },
             "RIFE-FlowNet",
-        )
-
-        block0_program = torch.export.export(
-            block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
+            dynamic_shapes=flownet_dynamic_shapes,
         )
 
         block0 = load_or_compile(
-            block0_program,
+            block0,
             flownet_inputs,
             block0_artifact,
             {
@@ -405,15 +400,12 @@ def drba_rife(
                 "use_python_runtime": False,
             },
             "RIFE-Block0",
+            dynamic_shapes=flownet_dynamic_shapes,
         )
 
         if encode is not None:
-            encode_program = torch.export.export(
-                encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
-            )
-
             encode = load_or_compile(
-                encode_program,
+                encode,
                 encode_inputs,
                 encode_artifact,
                 {
@@ -431,6 +423,7 @@ def drba_rife(
                     "use_python_runtime": False,
                 },
                 "RIFE-Encoder",
+                dynamic_shapes=encode_dynamic_shapes,
             )
 
 
