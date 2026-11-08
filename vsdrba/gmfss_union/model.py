@@ -1,5 +1,6 @@
 """GMFSS Union tensor inference and RIFE auxiliary adapter."""
 
+import gc
 import os
 import re
 import sys
@@ -69,15 +70,23 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     # ExportedProgram artifacts use the Python runtime.
                     "use_python_runtime": True,
                 }
+                source_module = self.module
                 if artifact_path is None:
-                    exported = torch.export.export(self.module, tuple(inputs))
+                    exported = torch.export.export(source_module, tuple(inputs))
                     self.compiled = torch_tensorrt.dynamo.compile(
                         exported, inputs=list(inputs), **compile_kwargs
                     ).eval()
+                    del exported
                 else:
                     self.compiled = load_or_compile(
-                        self.module, inputs, artifact_path, compile_kwargs, self.label
+                        source_module, inputs, artifact_path, compile_kwargs, self.label
                     )
+
+                # The raw engine now owns the inference weights. Do not keep
+                # the original eager PyTorch network alive beside the engine.
+                self.module = None
+                del source_module
+                gc.collect()
             except Exception as exc:
                 raise RuntimeError(
                     f"TensorRT-RTX could not fully compile {self.label}; "
