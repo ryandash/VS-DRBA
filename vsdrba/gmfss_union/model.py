@@ -51,7 +51,7 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     + str(tensorrt_rtx.__version__)
                 )
                 artifact_path = (
-                    os.path.join(self.cache_dir, cache_name + ".ts")
+                    os.path.join(self.cache_dir, cache_name + ".ep")
                     if self.cache_dir is not None else None
                 )
                 runtime_cache_path = (
@@ -66,8 +66,8 @@ class _StrictTensorRTRTXModule(torch.nn.Module):
                     "require_full_compilation": True,
                     "pass_through_build_failures": True,
                     "runtime_cache_path": runtime_cache_path,
-                    # Serialized TorchScript artifacts use the C++ runtime.
-                    "use_python_runtime": False,
+                    # ExportedProgram artifacts use the Python runtime.
+                    "use_python_runtime": True,
                 }
                 if artifact_path is None:
                     exported = torch.export.export(self.module, tuple(inputs))
