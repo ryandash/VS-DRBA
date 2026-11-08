@@ -6,6 +6,7 @@ from .geometry import coords_grid, generate_window_grid, normalize_coords
 
 def global_correlation_softmax(feature0, feature1,
                                pred_bidir_flow=False,
+                               return_correlation=False,
                                ):
     # global correlation
     b, c, h, w = feature0.shape
@@ -14,7 +15,7 @@ def global_correlation_softmax(feature0, feature1,
 
     correlation = torch.matmul(feature0, feature1).view(b, h, w, h, w) / (c ** 0.5)  # [B, H, W, H, W]
 
-    return_corr = correlation.clone()
+    return_corr = correlation.clone() if return_correlation else None
 
     # flow from softmax
     init_grid = coords_grid(b, h, w, device=correlation.device, dtype=feature0.dtype)  # [B, 2, H, W]

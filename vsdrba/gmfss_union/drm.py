@@ -1,3 +1,4 @@
+import torch
 from .softsplat import softsplat as warp
 from .utils import distance_calculator
 
@@ -80,20 +81,23 @@ def calc_drm_rife(t, flow10, flow12, linear=False):
 
     # For RIFE, drm should be aligned with the time corresponding to the intermediate frame.
     # drm_t0_t01 = warp(drm_t0_unaligned, flow10 * drm_t0_unaligned, None, warp_method)
-    drm_t1_t01 = warp(drm_t1_unaligned, flow10 * drm_t1_unaligned, None, warp_method)
-    drm_t1_t12 = warp(drm_t0_unaligned, flow12 * drm_t0_unaligned, None, warp_method)
-    # drm_t2_t12 = warp(drm_t1_unaligned, flow12 * drm_t1_unaligned, None, warp_method)
-
-    ones_mask = drm10.clone() * 0 + 1
-
-    mask_t1_t01 = warp(ones_mask, flow10 * drm_t1_unaligned, None, warp_method)
-    mask_t1_t12 = warp(ones_mask, flow12 * drm_t0_unaligned, None, warp_method)
+    ones_mask = torch.ones_like(drm10)
+    warped_t01 = warp(
+        torch.cat((drm_t1_unaligned, ones_mask), dim=1),
+        flow10 * drm_t1_unaligned, None, warp_method,
+    )
+    drm_t1_t01, mask_t1_t01 = warped_t01.split(1, dim=1)
+    warped_t12 = warp(
+        torch.cat((drm_t0_unaligned, ones_mask), dim=1),
+        flow12 * drm_t0_unaligned, None, warp_method,
+    )
+    drm_t1_t12, mask_t1_t12 = warped_t12.split(1, dim=1)
 
     gap_t1_t01 = mask_t1_t01 < 0.999
     gap_t1_t12 = mask_t1_t12 < 0.999
 
-    drm_t1_t01[gap_t1_t01] = drm_t1_unaligned[gap_t1_t01]
-    drm_t1_t12[gap_t1_t12] = drm_t0_unaligned[gap_t1_t12]
+    drm_t1_t01 = torch.where(gap_t1_t01, drm_t1_unaligned, drm_t1_t01)
+    drm_t1_t12 = torch.where(gap_t1_t12, drm_t0_unaligned, drm_t1_t12)
 
     return {
         "drm_t1_t01": drm_t1_t01,
@@ -123,23 +127,27 @@ def calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear=False):
         drm0t_t01_unaligned = 1 - drm1t_t01
         drm2t_t12_unaligned = 1 - drm1t_t12
 
-    drm0t_t01 = warp(drm0t_t01_unaligned, flow10, metric10, warp_method)
-    drm2t_t12 = warp(drm2t_t12_unaligned, flow12, metric12, warp_method)
-
-    # Create a mask with all ones to identify the holes in the warped drm maps
-    ones_mask = drm0t_t01.clone() * 0 + 1
-
-    # Warp the ones mask
-    warped_ones_mask0t_t01 = warp(ones_mask, flow10, metric10, warp_method)
-    warped_ones_mask2t_t12 = warp(ones_mask, flow12, metric12, warp_method)
+    # Warp each DRM map together with its all-ones coverage channel. The
+    # shared SoftSplat normalization preserves the original mask values.
+    ones_mask = torch.ones_like(drm0t_t01_unaligned)
+    warped0 = warp(
+        torch.cat((drm0t_t01_unaligned, ones_mask), dim=1),
+        flow10, metric10, warp_method,
+    )
+    drm0t_t01, warped_ones_mask0t_t01 = warped0.split(1, dim=1)
+    warped2 = warp(
+        torch.cat((drm2t_t12_unaligned, ones_mask), dim=1),
+        flow12, metric12, warp_method,
+    )
+    drm2t_t12, warped_ones_mask2t_t12 = warped2.split(1, dim=1)
 
     # Identify holes in warped drm map
     gap_0t_t01 = warped_ones_mask0t_t01 < 0.999
     gap_2t_t12 = warped_ones_mask2t_t12 < 0.999
 
     # Fill the holes in the warped drm maps with the inverse of the original drm maps
-    drm0t_t01[gap_0t_t01] = drm0t_t01_unaligned[gap_0t_t01]
-    drm2t_t12[gap_2t_t12] = drm2t_t12_unaligned[gap_2t_t12]
+    drm0t_t01 = torch.where(gap_0t_t01, drm0t_t01_unaligned, drm0t_t01)
+    drm2t_t12 = torch.where(gap_2t_t12, drm2t_t12_unaligned, drm2t_t12)
 
     return {
         "drm0t_t01": drm0t_t01,
@@ -167,20 +175,24 @@ def calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear=False)
 
     warp_method = 'soft' if (metric10 is not None and metric12 is not None) else 'avg'
 
-    # For RIFE, drm should be aligned with the time corresponding to the intermediate frame.
-    drm_t1_t01 = warp(drm_t1_unaligned, flow10 * drm_t1_unaligned, metric10, warp_method)
-    drm_t1_t12 = warp(drm_t0_unaligned, flow12 * drm_t0_unaligned, metric12, warp_method)
-
-    ones_mask = drm10.clone() * 0 + 1
-
-    mask_t1_t01 = warp(ones_mask, flow10 * drm_t1_unaligned, metric10, warp_method)
-    mask_t1_t12 = warp(ones_mask, flow12 * drm_t0_unaligned, metric12, warp_method)
+    # Fuse each DRM warp with its matching coverage-mask warp.
+    ones_mask = torch.ones_like(drm10)
+    warped_t01 = warp(
+        torch.cat((drm_t1_unaligned, ones_mask), dim=1),
+        flow10 * drm_t1_unaligned, metric10, warp_method,
+    )
+    drm_t1_t01, mask_t1_t01 = warped_t01.split(1, dim=1)
+    warped_t12 = warp(
+        torch.cat((drm_t0_unaligned, ones_mask), dim=1),
+        flow12 * drm_t0_unaligned, metric12, warp_method,
+    )
+    drm_t1_t12, mask_t1_t12 = warped_t12.split(1, dim=1)
 
     gap_t1_t01 = mask_t1_t01 < 0.999
     gap_t1_t12 = mask_t1_t12 < 0.999
 
-    drm_t1_t01[gap_t1_t01] = drm_t1_unaligned[gap_t1_t01]
-    drm_t1_t12[gap_t1_t12] = drm_t0_unaligned[gap_t1_t12]
+    drm_t1_t01 = torch.where(gap_t1_t01, drm_t1_unaligned, drm_t1_t01)
+    drm_t1_t12 = torch.where(gap_t1_t12, drm_t0_unaligned, drm_t1_t12)
 
     # why use drm0t1 not drm1t0, because rife use backward warp not forward warp.
     return {

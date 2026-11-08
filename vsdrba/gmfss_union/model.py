@@ -220,9 +220,12 @@ class GMFSS_UNION:
         elif any(pad):
             timestep = F.pad(timestep, pad, mode="replicate")
 
+        # The encoder is frame-local, so batch both images into one call.
+        # This reduces Python/TensorRT dispatch overhead and lets the CNN use
+        # a larger batch without changing either encoded feature tensor.
         with torch.profiler.record_function("GMFSS/RIFE_Encoder"):
-            feat0 = self.ifnet.encode(img0)
-            feat1 = self.ifnet.encode(img1)
+            encoded = self.ifnet.encode(torch.cat((img0, img1), dim=0))
+            feat0, feat1 = encoded.chunk(2, dim=0)
         with torch.profiler.record_function("GMFSS/RIFE_IFNet"):
             prediction = self.ifnet(img0, img1, timestep, feat0, feat1)
         return prediction[:, :, :original_height, :original_width]
@@ -251,10 +254,36 @@ class GMFSS_UNION:
     @torch.inference_mode()
     @torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu")
     def inference_ts_drba(self, I0, I1, I2, ts, reuse=None, linear=False):
-        reuseI1I0 = self.model.reuse(I1, I0, self.scale) if reuse is None else reuse
-        reuseI1I2 = self.model.reuse(
-            I1, I2, self.scale, feat_ext0=reuseI1I0[4]
-        )
+        if reuse is None:
+            # Both networks are frame-local. Batch the three unique frames once
+            # and reuse the center-frame pyramids for both adjacent GMFlow pairs.
+            with torch.profiler.record_function("GMFSS/TripletFeatureExtraction"):
+                frame_features = self.model.extract_frame_features(I1, I0, I2)
+                gmflow_features = self.model.extract_gmflow_features(
+                    I1, I0, I2, scale=self.scale
+                )
+            reuseI1I0 = self.model.reuse(
+                I1, I0, self.scale,
+                feat_ext0=frame_features[0], feat_ext1=frame_features[1],
+                gmflow_features=(gmflow_features[0], gmflow_features[1]),
+            )
+            reuseI1I2 = self.model.reuse(
+                I1, I2, self.scale,
+                feat_ext0=frame_features[0], feat_ext1=frame_features[2],
+                gmflow_features=(gmflow_features[0], gmflow_features[2]),
+            )
+        else:
+            reuseI1I0 = reuse
+            # Keep the triplet batch dimension stable for the fixed-shape RTX engines.
+            frame_features = self.model.extract_frame_features(I1, I2, I2)
+            gmflow_features = self.model.extract_gmflow_features(
+                I1, I2, I2, scale=self.scale
+            )
+            reuseI1I2 = self.model.reuse(
+                I1, I2, self.scale, feat_ext0=reuseI1I0[4],
+                feat_ext1=frame_features[1],
+                gmflow_features=(gmflow_features[0], gmflow_features[1]),
+            )
 
         flow10, metric10 = reuseI1I0[0], reuseI1I0[2]
         flow12, metric12 = reuseI1I2[0], reuseI1I2[2]
@@ -273,9 +302,10 @@ class GMFSS_UNION:
                 output.append(I2)
             elif 0 < t < 1:
                 t = 1 - t
-                drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
+                with torch.profiler.record_function("GMFSS/DRM"):
+                    drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
+                    drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
+                    drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
                 rife = self._rife_inference(I1s, I0s, drm_rife["drm_t1_t01"])
                 output.append(
                     self.model.inference(
@@ -287,9 +317,10 @@ class GMFSS_UNION:
                 )
             elif 1 < t < 2:
                 t = t - 1
-                drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
-                drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
+                with torch.profiler.record_function("GMFSS/DRM"):
+                    drm_gmfss = calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear)
+                    drm_rife = calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear)
+                    drm_rife = {k: resize(v, I0s.shape[2:]) for k, v in drm_rife.items()}
                 rife = self._rife_inference(I1s, I2s, drm_rife["drm_t1_t12"])
                 output.append(
                     self.model.inference(

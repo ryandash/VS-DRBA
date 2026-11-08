@@ -48,13 +48,45 @@ class Model:
             state_dict = load_state_dict(f"{path}/{filename}")
             network.load_state_dict(state_dict, strict=True)
 
-    def reuse(self, img0, img1, scale, feat_ext0=None):
-        # Adjacent pairs can share the already-computed features for img0.
-        if feat_ext0 is None:
+    def extract_frame_features(self, *images):
+        """Run FeatureNet on adjacent frames as one batch and split its pyramids."""
+        batch = torch.cat(images, dim=0)
+        with torch.profiler.record_function("GMFSS/FeatureNetTriplet"):
+            features = self.feat_ext(batch)
+        return [
+            [feature[index:index + 1] for feature in features]
+            for index in range(len(images))
+        ]
+
+    def extract_gmflow_features(self, *images, scale):
+        """Prepare and batch-extract GMFlow pyramids for adjacent frames."""
+        prepared = []
+        for image in images:
+            image = F.interpolate(image, scale_factor=0.5, mode="bilinear", align_corners=False)
+            if scale != 1.0:
+                image = F.interpolate(image, scale_factor=scale, mode="bilinear", align_corners=False)
+            height, width = image.shape[-2:]
+            padded_height = ((height + 31) // 32) * 32
+            padded_width = ((width + 31) // 32) * 32
+            pad = (0, padded_width - width, 0, padded_height - height)
+            if any(pad):
+                image = F.pad(image, pad, mode="replicate")
+            prepared.append(image)
+        return self.flownet.extract_features(prepared)
+
+    def reuse(self, img0, img1, scale, feat_ext0=None, feat_ext1=None, gmflow_features=None):
+        # Adjacent pairs can share precomputed FeatureNet pyramids.
+        if feat_ext0 is None and feat_ext1 is None:
+            with torch.profiler.record_function("GMFSS/FeatureNet"):
+                features = self.feat_ext(torch.cat((img0, img1), dim=0))
+            feat_ext0 = [feature[:1] for feature in features]
+            feat_ext1 = [feature[1:2] for feature in features]
+        elif feat_ext0 is None:
             with torch.profiler.record_function("GMFSS/FeatureNet"):
                 feat_ext0 = list(self.feat_ext(img0))
-        with torch.profiler.record_function("GMFSS/FeatureNet"):
-            feat_ext1 = list(self.feat_ext(img1))
+        elif feat_ext1 is None:
+            with torch.profiler.record_function("GMFSS/FeatureNet"):
+                feat_ext1 = list(self.feat_ext(img1))
 
         img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
@@ -79,7 +111,14 @@ class Model:
 
         # One bidirectional pass shares GMFlow's CNN and transformer work.
         with torch.profiler.record_function("GMFSS/GMFlow"):
-            flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
+            if gmflow_features is None:
+                flow_bidir = self.flownet(imgf0, imgf1, pred_bidir_flow=True)
+            else:
+                flow_bidir = self.flownet(
+                    imgf0, imgf1, pred_bidir_flow=True,
+                    feature0_list=gmflow_features[0],
+                    feature1_list=gmflow_features[1],
+                )
         flow01, flow10 = flow_bidir.chunk(2, dim=0)
         # Remove only the synthetic right/bottom border before any rescaling;
         # resizing the padded field would distort vectors across the full image.
@@ -109,12 +148,14 @@ class Model:
         Z1t, Z2t = timestep0 * metric0, timestep1 * metric1
 
         img0 = F.interpolate(img0, scale_factor=0.5, mode="bilinear", align_corners=False)
-        I1t = warp(img0, F1t, Z1t, strMode="soft")
         img1 = F.interpolate(img1, scale_factor=0.5, mode="bilinear", align_corners=False)
-        I2t = warp(img1, F2t, Z2t, strMode="soft")
-    
-        feat1t1 = warp(feat11, F1t, Z1t, strMode="soft")
-        feat2t1 = warp(feat21, F2t, Z2t, strMode="soft")
+
+        # Image and level-1 features share the same half-resolution flow field.
+        # Warp them together so SoftSplat computes the flow geometry only once.
+        warped0 = warp(torch.cat((img0, feat11), dim=1), F1t, Z1t, strMode="soft")
+        I1t, feat1t1 = warped0.split((img0.shape[1], feat11.shape[1]), dim=1)
+        warped1 = warp(torch.cat((img1, feat21), dim=1), F2t, Z2t, strMode="soft")
+        I2t, feat2t1 = warped1.split((img1.shape[1], feat21.shape[1]), dim=1)
     
         F1td = F.interpolate(F1t, scale_factor=0.5, mode="bilinear", align_corners=False) * 0.5
         Z1d = F.interpolate(Z1t, scale_factor=0.5, mode="bilinear", align_corners=False)
@@ -131,10 +172,26 @@ class Model:
         feat2t3 = warp(feat23, F2tdd, Z2dd, strMode="soft")
 
         if isinstance(timestep0, torch.Tensor) and enable_mask:
-            timestep0 = warp(timestep0, F1t, Z1t, strMode="soft")
-            timestep1 = warp(timestep1, F2t, Z2t, strMode="soft")
-            gaps0 = warp(torch.ones_like(timestep0), F1t, Z1t, strMode="soft") < 0.999
-            gaps1 = warp(torch.ones_like(timestep1), F2t, Z2t, strMode="soft") < 0.999
+            # The warped all-ones channel is the coverage mask. Fuse it with
+            # the timestep warp while retaining the exact normalized mask.
+            timestep0_channels = timestep0.shape[1]
+            warped_t0 = warp(
+                torch.cat((timestep0, torch.ones_like(timestep0)), dim=1),
+                F1t, Z1t, strMode="soft",
+            )
+            timestep0, coverage0 = warped_t0.split(
+                (timestep0_channels, timestep0_channels), dim=1
+            )
+            timestep1_channels = timestep1.shape[1]
+            warped_t1 = warp(
+                torch.cat((timestep1, torch.ones_like(timestep1)), dim=1),
+                F2t, Z2t, strMode="soft",
+            )
+            timestep1, coverage1 = warped_t1.split(
+                (timestep1_channels, timestep1_channels), dim=1
+            )
+            gaps0 = coverage0 < 0.999
+            gaps1 = coverage1 < 0.999
             invalid_mask = torch.logical_or(gaps0, gaps1)
             timestep0 = timestep0.masked_fill(invalid_mask, 1)
             timestep1 = timestep1.masked_fill(invalid_mask, 1)
