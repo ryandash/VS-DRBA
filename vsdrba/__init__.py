@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import math
 import os
 import sys
@@ -116,6 +117,8 @@ def drba_rife(
                                     Supported values are 1 (baseline) and 2 (batched execution).
     :param trt_cache_dir:           Directory for TensorRT-RTX runtime JIT caches. Cached kernels are reused on
                                     subsequent runs when the model, input shape, precision, GPU, and runtime match.
+                                    With TensorRT enabled, caches are explicitly flushed when the final output frame
+                                    is evaluated; this does not depend on vspipe shutting down Python cleanly.
     """
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("rife: this is not a clip")
@@ -435,6 +438,37 @@ def drba_rife(
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
+    # Keep the model references in one mutable holder. The VapourSynth callbacks
+    # close over this holder rather than the modules directly, allowing the final
+    # output-frame callback to release the compiled modules deterministically.
+    module_refs = {"flownet": flownet, "encode": encode, "block0": block0}
+    del flownet, encode, block0
+
+    cache_save_state = {"last_frame": None, "saved": False}
+
+    def save_runtime_caches_at_end(n: int) -> None:
+        if not trt or n != cache_save_state["last_frame"] or cache_save_state["saved"]:
+            return
+
+        # Ensure no inference/encoding work is still using the engines before
+        # releasing them. Torch-TensorRT 2.11 persists runtime_cache_path caches
+        # from the engine/module cleanup path.
+        torch.cuda.synchronize(device)
+        module_refs.clear()
+        gc.collect()
+        cache_save_state["saved"] = True
+
+        expected_caches = [flownet_runtime_cache, block0_runtime_cache]
+        if Head is not None:
+            expected_caches.append(encode_runtime_cache)
+        missing = [path for path in expected_caches if not os.path.isfile(path)]
+        if missing:
+            warnings.warn(
+                "TensorRT runtime cache cleanup completed, but these cache files were not created: "
+                + ", ".join(missing),
+                RuntimeWarning,
+            )
+
     inf_stream = torch.cuda.Stream(device)
     inf_f2t_stream = torch.cuda.Stream(device)
     inf_t2f_stream = torch.cuda.Stream(device)
@@ -469,7 +503,7 @@ def drba_rife(
 
         with enc_stream_lock, torch.cuda.stream(enc_stream):
 
-            output = encode(img)
+            output = module_refs["encode"](img)
 
             enc_stream.synchronize()
 
@@ -507,6 +541,7 @@ def drba_rife(
             t = n * factor_den % factor_num / factor_num
 
             if t == 0 or (sc and f[0].props.get("_SceneChangeNext")):
+                save_runtime_caches_at_end(n)
                 return f[0]
 
             if Head is not None:
@@ -537,17 +572,17 @@ def drba_rife(
                 if real_n in encode_cache:
                     f0 = encode_cache[real_n]
                 else:
-                    f0 = encode(img0)
+                    f0 = module_refs["encode"](img0)
 
                 if real_n_next in encode_cache:
                     f1 = encode_cache[real_n_next]
                 else:
-                    f1 = encode(img1)
+                    f1 = module_refs["encode"](img1)
 
                 if real_n_next_next in encode_cache:
                     f2 = encode_cache[real_n_next_next]
                 else:
-                    f2 = encode(img2)
+                    f2 = module_refs["encode"](img2)
             else:
                 img0 = frame_to_tensor(f[0], device)
                 img1 = frame_to_tensor(f[1], device)
@@ -572,19 +607,19 @@ def drba_rife(
                 if Head is not None:
                     batch_f0 = torch.cat((f1, f1), dim=0)
                     batch_f1 = torch.cat((f0, f2), dim=0)
-                    batch_flow = block0(
+                    batch_flow = module_refs["block0"](
                         batch_img0, batch_img1, batch_t, batch_f0, batch_f1
                     )[:, :2]
                 else:
-                    batch_flow = block0(batch_img0, batch_img1, batch_t)[:, :2]
+                    batch_flow = module_refs["block0"](batch_img0, batch_img1, batch_t)[:, :2]
 
                 flo0, flo1 = batch_flow.chunk(2, dim=0)
             elif Head is not None:
-                flo0 = block0(img1, img0, t05, f1, f0)[:, :2]
-                flo1 = block0(img1, img2, t05, f1, f2)[:, :2]
+                flo0 = module_refs["block0"](img1, img0, t05, f1, f0)[:, :2]
+                flo1 = module_refs["block0"](img1, img2, t05, f1, f2)[:, :2]
             else:
-                flo0 = block0(img1, img0, t05)[:, :2]
-                flo1 = block0(img1, img2, t05)[:, :2]
+                flo0 = module_refs["block0"](img1, img0, t05)[:, :2]
+                flo1 = module_refs["block0"](img1, img2, t05)[:, :2]
 
             ones_mask = flo0.clone() * 0 + 1
             cflo0 = torch.cat((flo0, ones_mask), dim=1)
@@ -627,9 +662,9 @@ def drba_rife(
                                        align_corners=False)
 
             if Head is not None:
-                output = flownet(img1, img0, drm, f1, f0)
+                output = module_refs["flownet"](img1, img0, drm, f1, f0)
             else:
-                output = flownet(img1, img0, drm)
+                output = module_refs["flownet"](img1, img0, drm)
 
             inf_stream.synchronize()
 
@@ -637,7 +672,9 @@ def drba_rife(
             if need_pad:
                 output = output[:, :, :h, :w]
 
-            return tensor_to_frame(output, f[0].copy(), inf_t2f_stream)
+            result = tensor_to_frame(output, f[0].copy(), inf_t2f_stream)
+            save_runtime_caches_at_end(n)
+            return result
 
     if Head is not None:
         encoded = clip.std.FrameEval(lambda n: clip.std.ModifyFrame(clip, encoding), clip_src=clip)
@@ -653,6 +690,8 @@ def drba_rife(
         clip0 = clip0[::factor_den]
         clip1 = clip1[::factor_den]
         clip2 = clip2[::factor_den]
+
+    cache_save_state["last_frame"] = clip0.num_frames - 1
 
     return clip0.std.FrameEval(lambda n: clip0.std.ModifyFrame([clip0, clip1, clip2], inference),
                                clip_src=[clip0, clip1, clip2])
