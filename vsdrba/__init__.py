@@ -461,7 +461,10 @@ def drba_rife(
         expected_caches = [flownet_runtime_cache, block0_runtime_cache]
         if Head is not None:
             expected_caches.append(encode_runtime_cache)
-        missing = [path for path in expected_caches if not os.path.isfile(path)]
+        missing = [
+            path for path in expected_caches
+            if not os.path.isfile(path) or os.path.getsize(path) == 0
+        ]
         if missing:
             warnings.warn(
                 "TensorRT runtime cache cleanup completed, but these cache files were not created: "
