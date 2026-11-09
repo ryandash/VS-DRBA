@@ -70,8 +70,7 @@ python -m pip uninstall -y torch-tensorrt tensorrt tensorrt-cu12 tensorrt-cu12-b
 Install the matching PyTorch CUDA 12.9 wheels and Torch-TensorRT-RTX:
 
 ```bat
-python -m pip install --index-url https://download.pytorch.org/whl/cu129 torch==2.11.0+cu129 torchvision==0.26.0+cu129
-python -m pip install --index-url https://download.pytorch.org/whl/torch-tensorrt-rtx --extra-index-url https://pypi.org/simple torch-tensorrt-rtx==2.11.0
+python -m pip install --pre torch torchvision torch_tensorrt_rtx --extra-index-url https://download.pytorch.org/whl/nightly/cu132
 python -m pip install -U cupy-cuda12x
 python -m pip check
 ```
