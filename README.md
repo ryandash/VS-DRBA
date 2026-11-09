@@ -16,7 +16,9 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 
 ## Installation
 ```
-pip install -U vsdrba==1.0.2
+python -m pip install hatchling
+python -m pip install -U "vsdrba @ git+https://github.com/ryandash/VS-DRBA.git"
+python -m vsdrba
 ```
 The supported RIFE checkpoints are 4.25, 4.26, and 4.26 Heavy. To download these checkpoints, run `python -m vsdrba`. GMFSS Union is implemented in the `vsdrba/gmfss_union` package on this branch.
 
@@ -24,40 +26,36 @@ The supported RIFE checkpoints are 4.25, 4.26, and 4.26 Heavy. To download these
 ```python
 from vsdrba import drba_rife
 
-ret = drba_rife(clip)
-```
-
-See `__init__.py` for the description of the parameters.
-
-
-## Model support and GMFSS Union
-
-This branch intentionally retains only the RIFE 4.25, 4.26, and 4.26 Heavy implementations. GMFSS Union uses the RIFE 4.25 architecture as its auxiliary interpolation network, independently of the public RIFE model selector.
-
-GMFSS Union is being ported as a separate pipeline rather than as another RIFE selector. Its first integration stages are GMFlow, FeatureNet, MetricNet, DRM, SoftSplat, the RIFE 4.25 auxiliary network, and FusionNet. TensorRT compilation will be introduced per network, with PyTorch/CUDA warping and DRM kept outside TensorRT until correctness is established.
-
-Target validation hardware: NVIDIA GeForce RTX 5070 Ti (Blackwell). Initial TensorRT validation should use fixed spatial dimensions and FP16, with engine cache keys including GPU, TensorRT/PyTorch versions, resolution, and precision.
-
-
-## GMFSS Union VapourSynth API
-
-GMFSS Union is available as a separate pipeline and does not add a new value to the RIFE `model` selector:
-
-```python
-from vsdrba import drba_gmfss
-
-clip = drba_gmfss(
+clip = drba_rife(
     clip,
     factor_num=2,
     factor_den=1,
+    model="4.25",
+    sc=True,
+    sc_threshold=0.15,
+    trt=True,
+    trt_optimization_level=5
+)
+```
+or
+```python
+from vsgmfss_fortuna import gmfss_fortuna
+
+clip = gmfss_fortuna(
+    clip,
+    factor_num=2,
+    factor_den=1,
+    model=1,
     scale=1.0,
     sc=True,
+    sc_threshold=0.15,
+    num_streams=1,
     trt=True,
+    trt_optimization_level=5
 )
 ```
 
-The GMFSS clip path currently requires RGBH or RGBS input and CUDA. `trt=True` compiles the selected convolutional submodules with TensorRT-RTX. The GMFlow transformer/matching, DRM, SoftSplat, RIFE auxiliary warping blocks, and VapourSynth orchestration remain outside the engine boundary by design. RTX import or engine-build failures are fatal; there is no automatic standard-TensorRT or eager fallback. The first interpolated frame triggers engine compilation for the padded clip dimensions. See [the GMFSS Union guide](vsdrba/gmfss_union/README.md) for checkpoint paths, frame-rate options, scene-change handling, and validation limits.
-
+See `__init__.py` for the description of the parameters.
 
 ## TensorRT-RTX on Windows
 
