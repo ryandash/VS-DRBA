@@ -1,25 +1,26 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import sys
 import warnings
+from contextlib import contextmanager
 from fractions import Fraction
 from threading import Lock
-from contextlib import contextmanager
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import vapoursynth as vs
 from .__main__ import download_model
-from torch._decomp import get_decompositions
 from .softsplat.softsplat_torch import softsplat as fwarp
 
 try:
     import cupy
 
-    if cupy.cuda.get_cuda_path() != None:
+    if cupy.cuda.get_cuda_path() is not None:
         from .softsplat.softsplat import softsplat as fwarp
 except Exception:
     pass
@@ -31,6 +32,10 @@ os.environ["CUDA_MODULE_LOADING"] = "LAZY"
 
 warnings.filterwarnings("ignore", "Both operands of the binary elementwise op")
 warnings.filterwarnings("ignore", "The given NumPy array is not writable")
+warnings.filterwarnings("ignore", ".*_opaque_base is deprecated.*")
+warnings.filterwarnings("ignore", ".*register_opaque_type is deprecated.*")
+warnings.filterwarnings("ignore", ".*typ='reference' is deprecated.*")
+warnings.filterwarnings("ignore", ".*triton not found.*")
 
 model_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "models")
 
@@ -39,6 +44,7 @@ models = [
     "4.26",
     "4.26.heavy",
 ]
+
 
 @contextmanager
 def redirect_stdout_to_stderr():
@@ -49,6 +55,26 @@ def redirect_stdout_to_stderr():
     finally:
         os.dup2(old_stdout, 1)
         os.close(old_stdout)
+
+
+@contextmanager
+def suppress_c_output(enabled: bool = True):
+    if not enabled:
+        yield
+        return
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stdout = os.dup(1)
+    old_stderr = os.dup(2)
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(old_stdout, 1)
+        os.dup2(old_stderr, 2)
+        os.close(old_stdout)
+        os.close(old_stderr)
+        os.close(devnull)
 
 
 @redirect_stdout_to_stderr()
@@ -67,10 +93,6 @@ def drba_rife(
         sc: bool = False,
         sc_threshold: float | None = None,
         trt: bool = False,
-        trt_static_shape: bool = True,
-        trt_min_shape: list[int] = [128, 128],
-        trt_opt_shape: list[int] = [1920, 1080],
-        trt_max_shape: list[int] = [1920, 1080],
         trt_debug: bool = False,
         trt_workspace_size: int = 0,
         trt_max_aux_streams: int | None = None,
@@ -98,10 +120,6 @@ def drba_rife(
                                     Leave the argument as None if the frames already have _SceneChangeNext property set.
     :param trt:                     Use TensorRT-RTX for high-performance inference.
                                     Not supported in '4.0' and '4.1' models.
-    :param trt_static_shape:        Build with static or dynamic shapes.
-    :param trt_min_shape:           Min size of dynamic shapes. Ignored if trt_static_shape=True.
-    :param trt_opt_shape:           Opt size of dynamic shapes. Ignored if trt_static_shape=True.
-    :param trt_max_shape:           Max size of dynamic shapes. Ignored if trt_static_shape=True.
     :param trt_debug:               Print out verbose debugging information.
     :param trt_workspace_size:      Size constraints of workspace memory pool.
     :param trt_max_aux_streams:     Maximum number of auxiliary streams per inference stream that TRT is allowed to use
@@ -129,17 +147,11 @@ def drba_rife(
     if model not in models:
         raise vs.Error(f"rife: model must be one of {models}")
 
-    if factor_num < 1:
-        raise vs.Error("rife: factor_num must be at least 1")
+    if factor_num < 1 or factor_den < 1:
+        raise vs.Error("rife: factor_num and factor_den must be at least 1")
 
-    if factor_den < 1:
-        raise vs.Error("rife: factor_den must be at least 1")
-
-    if fps_num is not None and fps_num < 1:
-        raise vs.Error("rife: fps_num must be at least 1")
-
-    if fps_den is not None and fps_den < 1:
-        raise vs.Error("rife: fps_den must be at least 1")
+    if (fps_num is not None and fps_num < 1) or (fps_den is not None and fps_den < 1):
+        raise vs.Error("rife: fps_num and fps_den must be at least 1")
 
     if fps_num is not None and fps_den is not None and clip.fps == 0:
         raise vs.Error("rife: clip does not have a valid frame rate and hence fps_num and fps_den cannot be used")
@@ -147,33 +159,11 @@ def drba_rife(
     if scale not in [0.25, 0.5, 1.0, 2.0, 4.0]:
         raise vs.Error("rife: scale must be 0.25, 0.5, 1.0, 2.0, or 4.0")
 
-    if not trt_static_shape:
-        raise vs.Error("rife: dynamic shapes is not allowed at the moment due to issues in TensorRT-RTX")
-
-        if not isinstance(trt_min_shape, list) or len(trt_min_shape) != 2:
-            raise vs.Error("rife: trt_min_shape must be a list with 2 items")
-
-        if any(trt_min_shape[i] < 1 for i in range(2)):
-            raise vs.Error("rife: trt_min_shape must be at least 1")
-
-        if not isinstance(trt_opt_shape, list) or len(trt_opt_shape) != 2:
-            raise vs.Error("rife: trt_opt_shape must be a list with 2 items")
-
-        if any(trt_opt_shape[i] < 1 for i in range(2)):
-            raise vs.Error("rife: trt_opt_shape must be at least 1")
-
-        if not isinstance(trt_max_shape, list) or len(trt_max_shape) != 2:
-            raise vs.Error("rife: trt_max_shape must be a list with 2 items")
-
-        if any(trt_max_shape[i] < 1 for i in range(2)):
-            raise vs.Error("rife: trt_max_shape must be at least 1")
-
-        if any(trt_min_shape[i] >= trt_max_shape[i] for i in range(2)):
-            raise vs.Error("rife: trt_min_shape must be less than trt_max_shape")
-
-    if not os.path.exists(os.path.join(model_dir, f"flownet_v{model}.pkl")) or os.path.getsize(os.path.join(model_dir, f"flownet_v{model}.pkl")) == 0:
+    model_name = f"flownet_v{model}.pkl"
+    model_path = os.path.join(model_dir, model_name)
+    if not os.path.exists(model_path) or os.path.getsize(model_path) == 0:
         if auto_download:
-            download_model(f"https://github.com/HolyWu/vs-rife/releases/download/model/flownet_v{model}.pkl")
+            download_model(f"https://github.com/HolyWu/vs-rife/releases/download/model/{model_name}")
         else:
             raise vs.Error(
                 "rife: model file has not been downloaded. run `python -m vsdrba` to download all models, or set "
@@ -184,28 +174,21 @@ def drba_rife(
 
     fp16 = clip.format.bits_per_sample == 16
     dtype = torch.half if fp16 else torch.float
-
     device = torch.device("cuda", device_index)
 
-    modulo = 32
     match model:
         case "4.25":
             from .IFNet_HDv3_v4_25 import Head, IFNet
-
             encode_channel = 4
             modulo = 64
         case "4.26":
             from .IFNet_HDv3_v4_26 import Head, IFNet
-
             encode_channel = 4
             modulo = 64
         case "4.26.heavy":
             from .IFNet_HDv3_v4_26_heavy import Head, IFNet
-
             encode_channel = 16
             modulo = 64
-
-    model_name = f"flownet_v{model}.pkl"
 
     if fps_num is not None and fps_den is not None:
         factor = Fraction(fps_num, fps_den) / clip.fps
@@ -228,36 +211,28 @@ def drba_rife(
     if sc and sc_threshold is not None:
         clip = sc_detect(clip, sc_threshold)
 
-    # TensorRT-RTX is the only supported compiled backend. Import or
-    # compilation failures are fatal; never silently fall back to eager mode.
     if trt:
         try:
-            import tensorrt_rtx as tensorrt
-            import torch_tensorrt
+            if not trt_debug:
+                logging.getLogger("filelock").setLevel(logging.ERROR)
+
+            with suppress_c_output(not trt_debug):
+                import tensorrt_rtx as tensorrt
+                import torch_tensorrt
+
+            if not trt_debug:
+                torch_tensorrt.logging.set_level(logging.ERROR)
+                logging.getLogger("torch_tensorrt").setLevel(logging.ERROR)
         except Exception as exc:
             raise vs.Error(
                 f"rife: TensorRT-RTX is unavailable or failed to import: {exc}"
             ) from exc
 
-    if trt:
-        if trt_static_shape:
-            dimensions = f"{pw}x{ph}"
-        else:
-            for i in range(2):
-                trt_min_shape[i] = math.ceil(trt_min_shape[i] / tmp) * tmp
-                trt_opt_shape[i] = math.ceil(trt_opt_shape[i] / tmp) * tmp
-                trt_max_shape[i] = math.ceil(trt_max_shape[i] / tmp) * tmp
-
-            dimensions = (
-                f"min-{trt_min_shape[0]}x{trt_min_shape[1]}"
-                f"_opt-{trt_opt_shape[0]}x{trt_opt_shape[1]}"
-                f"_max-{trt_max_shape[0]}x{trt_max_shape[1]}"
-            )
-
+        dimensions = f"{pw}x{ph}"
         cache_dir = os.path.realpath(trt_cache_dir)
         os.makedirs(cache_dir, exist_ok=True)
 
-        checkpoint_stat = os.stat(os.path.join(model_dir, model_name))
+        checkpoint_stat = os.stat(model_path)
         cache_name = (
             f"DRBA_{model_name}"
             + f"_weights-{checkpoint_stat.st_size}-{checkpoint_stat.st_mtime_ns}"
@@ -290,133 +265,64 @@ def drba_rife(
 
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
-        if trt_static_shape:
-            if encode is not None:
-                flownet_inputs = (
-                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                    torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
-                    torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
-                    torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
-                )
-
-                encode_inputs = (torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),)
-            else:
-                flownet_inputs = (
-                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                    torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
-                    torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
-                )
-
-            flownet_dynamic_shapes = None
-            encode_dynamic_shapes = None
+        if encode is not None:
+            flownet_inputs = (
+                torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
+                torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
+                torch.zeros([1, encode_channel, ph, pw], dtype=dtype, device=device),
+            )
+            encode_inputs = (torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),)
         else:
-            trt_min_shape.reverse()
-            trt_opt_shape.reverse()
-            trt_max_shape.reverse()
+            flownet_inputs = (
+                torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                torch.zeros([1, 3, ph, pw], dtype=dtype, device=device),
+                torch.zeros([1, 1, ph, pw], dtype=dtype, device=device),
+            )
 
-            if encode is not None:
-                flownet_inputs = (
-                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                    torch.zeros([1, 1] + trt_opt_shape, dtype=dtype, device=device),
-                    torch.zeros([1, encode_channel] + trt_opt_shape, dtype=dtype, device=device),
-                    torch.zeros([1, encode_channel] + trt_opt_shape, dtype=dtype, device=device),
-                )
+        common_compile_kwargs = dict(
+            device=device,
+            debug=trt_debug,
+            num_avg_timing_iters=4,
+            workspace_size=trt_workspace_size,
+            min_block_size=1,
+            require_full_compilation=True,
+            pass_through_build_failures=True,
+            max_aux_streams=trt_max_aux_streams,
+            optimization_level=trt_optimization_level,
+            cache_built_engines=True,
+            reuse_cached_engines=True,
+            engine_cache_dir=cache_dir,
+        )
 
-                encode_inputs = (torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),)
-            else:
-                flownet_inputs = (
-                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                    torch.zeros([1, 3] + trt_opt_shape, dtype=dtype, device=device),
-                    torch.zeros([1, 1] + trt_opt_shape, dtype=dtype, device=device),
-                )
-
-            _height = torch.export.Dim("height", min=trt_min_shape[0] // tmp, max=trt_max_shape[0] // tmp)
-            _width = torch.export.Dim("width", min=trt_min_shape[1] // tmp, max=trt_max_shape[1] // tmp)
-            dim_height = _height * tmp
-            dim_width = _width * tmp
-
-            if encode is not None:
-                flownet_dynamic_shapes = {
-                    "img0": {2: dim_height, 3: dim_width},
-                    "img1": {2: dim_height, 3: dim_width},
-                    "timestep": {2: dim_height, 3: dim_width},
-                    "f0": {2: dim_height, 3: dim_width},
-                    "f1": {2: dim_height, 3: dim_width},
-                }
-
-                encode_dynamic_shapes = ({2: dim_height, 3: dim_width},)
-            else:
-                flownet_dynamic_shapes = {
-                    "img0": {2: dim_height, 3: dim_width},
-                    "img1": {2: dim_height, 3: dim_width},
-                    "timestep": {2: dim_height, 3: dim_width},
-                }
-
-        flownet_program = torch.export.export(flownet, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes)
-
+        flownet_program = torch.export.export(flownet, flownet_inputs)
         flownet = torch_tensorrt.dynamo.compile(
             flownet_program,
             flownet_inputs,
-            device=device,
-            debug=trt_debug,
-            num_avg_timing_iters=4,
-            workspace_size=trt_workspace_size,
-            min_block_size=1,
-            require_full_compilation=True,
-            pass_through_build_failures=True,
-            max_aux_streams=trt_max_aux_streams,
-            optimization_level=trt_optimization_level,
             use_explicit_typing=True,
             runtime_cache_path=flownet_runtime_cache,
-            use_python_runtime=True,
+            **common_compile_kwargs,
         )
 
-        block0_program = torch.export.export(
-            block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
-        )
-
+        block0_program = torch.export.export(block0, flownet_inputs)
         block0 = torch_tensorrt.dynamo.compile(
             block0_program,
             flownet_inputs,
-            device=device,
-            debug=trt_debug,
-            num_avg_timing_iters=4,
-            workspace_size=trt_workspace_size,
-            min_block_size=1,
-            require_full_compilation=True,
-            pass_through_build_failures=True,
-            max_aux_streams=trt_max_aux_streams,
-            optimization_level=trt_optimization_level,
             use_explicit_typing=True,
             runtime_cache_path=block0_runtime_cache,
-            use_python_runtime=True,
+            **common_compile_kwargs,
         )
 
         if encode is not None:
-            encode_program = torch.export.export(
-                encode, encode_inputs, dynamic_shapes=encode_dynamic_shapes
-            )
-
+            encode_program = torch.export.export(encode, encode_inputs)
             encode = torch_tensorrt.dynamo.compile(
                 encode_program,
                 encode_inputs,
-                device=device,
                 enabled_precisions={dtype},
-                debug=trt_debug,
-                num_avg_timing_iters=4,
-                workspace_size=trt_workspace_size,
-                min_block_size=1,
-                require_full_compilation=True,
-                pass_through_build_failures=True,
-                max_aux_streams=trt_max_aux_streams,
-                optimization_level=trt_optimization_level,
                 runtime_cache_path=encode_runtime_cache,
-                use_python_runtime=True,
+                **common_compile_kwargs,
             )
-
-
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
@@ -444,29 +350,22 @@ def drba_rife(
     def encoding(n: int, f: vs.VideoFrame) -> vs.VideoFrame:
         with enc_f2t_stream_lock, torch.cuda.stream(enc_f2t_stream):
             img = frame_to_tensor(f, device)
-
             if need_pad:
                 img = F.pad(img, padding)
-
             enc_f2t_stream.synchronize()
-
             frame_cache[n] = img
 
         with enc_stream_lock, torch.cuda.stream(enc_stream):
-
             output = encode(img)
-
             enc_stream.synchronize()
-
             encode_cache[n] = output
-
             return f
 
     @torch.inference_mode()
     def distance_calculator(_x):
-        dtype = _x.dtype
+        x_dtype = _x.dtype
         u, v = _x[:, 0:1].float(), _x[:, 1:].float()
-        return torch.sqrt(u ** 2 + v ** 2).to(dtype)
+        return torch.sqrt(u ** 2 + v ** 2).to(x_dtype)
 
     @torch.inference_mode()
     def inference(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
@@ -477,103 +376,64 @@ def drba_rife(
                 real_n_next_next = min(real_n_next + 1, clip.num_frames - 1)
 
                 cache_to_delete = real_n - 10
-
                 if cache_to_delete >= 2:
-                    if cache_to_delete in frame_cache:
-                        del frame_cache[cache_to_delete]
-                    if cache_to_delete + 1 in frame_cache:
-                        del frame_cache[cache_to_delete + 1]
-
-                    if cache_to_delete in encode_cache:
-                        del encode_cache[cache_to_delete]
-                    if cache_to_delete + 1 in encode_cache:
-                        del encode_cache[cache_to_delete + 1]
+                    frame_cache.pop(cache_to_delete, None)
+                    frame_cache.pop(cache_to_delete + 1, None)
+                    encode_cache.pop(cache_to_delete, None)
+                    encode_cache.pop(cache_to_delete + 1, None)
 
             t = n * factor_den % factor_num / factor_num
 
             if t == 0 or (sc and f[0].props.get("_SceneChangeNext")):
                 return f[0]
 
+            def get_frame_tensor(idx: int, frame: vs.VideoFrame) -> torch.Tensor:
+                if Head is not None and idx in frame_cache:
+                    return frame_cache[idx]
+                tensor = frame_to_tensor(frame, device)
+                return F.pad(tensor, padding) if need_pad else tensor
+
             if Head is not None:
-                if real_n in frame_cache:
-                    img0 = frame_cache[real_n]
-                else:
-                    img0 = frame_to_tensor(f[0], device)
+                img0 = get_frame_tensor(real_n, f[0])
+                img1 = get_frame_tensor(real_n_next, f[1])
+                img2 = get_frame_tensor(real_n_next_next, f[2])
 
-                    if need_pad:
-                        img0 = F.pad(img0, padding)
-
-                if real_n_next in frame_cache:
-                    img1 = frame_cache[real_n_next]
-                else:
-                    img1 = frame_to_tensor(f[1], device)
-
-                    if need_pad:
-                        img1 = F.pad(img1, padding)
-
-                if real_n_next_next in frame_cache:
-                    img2 = frame_cache[real_n_next_next]
-                else:
-                    img2 = frame_to_tensor(f[2], device)
-
-                    if need_pad:
-                        img2 = F.pad(img2, padding)
-
-                if real_n in encode_cache:
-                    f0 = encode_cache[real_n]
-                else:
-                    f0 = encode(img0)
-
-                if real_n_next in encode_cache:
-                    f1 = encode_cache[real_n_next]
-                else:
-                    f1 = encode(img1)
-
-                if real_n_next_next in encode_cache:
-                    f2 = encode_cache[real_n_next_next]
-                else:
-                    f2 = encode(img2)
+                f0 = encode_cache[real_n] if real_n in encode_cache else encode(img0)
+                f1 = encode_cache[real_n_next] if real_n_next in encode_cache else encode(img1)
+                f2 = encode_cache[real_n_next_next] if real_n_next_next in encode_cache else encode(img2)
             else:
-                img0 = frame_to_tensor(f[0], device)
-                img1 = frame_to_tensor(f[1], device)
-                img2 = frame_to_tensor(f[2], device)
-
-                if need_pad:
-                    img0 = F.pad(img0, padding)
-                    img1 = F.pad(img1, padding)
-                    img2 = F.pad(img2, padding)
+                img0 = get_frame_tensor(-1, f[0])
+                img1 = get_frame_tensor(-1, f[1])
+                img2 = get_frame_tensor(-1, f[2])
 
             inf_f2t_stream.synchronize()
 
         with inf_stream_lock, torch.cuda.stream(inf_stream):
             t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
             if Head is not None:
-                # flo0 -> 0.5 -> 1
-                # flo1 -> 1.5 -> 1
                 flo0 = block0(img1, img0, t05, f1, f0)[:, :2]
                 flo1 = block0(img1, img2, t05, f1, f2)[:, :2]
             else:
                 flo0 = block0(img1, img0, t05)[:, :2]
                 flo1 = block0(img1, img2, t05)[:, :2]
 
-            ones_mask = flo0.clone() * 0 + 1
+            ones_mask = torch.ones_like(flo0)
             cflo0 = torch.cat((flo0, ones_mask), dim=1)
             cflo1 = torch.cat((flo1, ones_mask), dim=1)
 
             wflo0 = fwarp(cflo0, flo0, None, 'avg')
             wflo1 = fwarp(cflo1, flo1, None, 'avg')
 
-            mask0 = wflo0[:, 2:]
-            mask1 = wflo1[:, 2:]
-
-            gap0 = mask0 < 0.999
-            gap1 = mask1 < 0.999
+            gap0 = wflo0[:, 2:] < 0.999
+            gap1 = wflo1[:, 2:] < 0.999
 
             wflo0 = -1 * wflo0[:, :2]
             wflo1 = -1 * wflo1[:, :2]
 
-            wflo0[gap0] = (ones_mask * max(flo0.shape[2], flo0.shape[3]))[gap0]
-            wflo1[gap1] = (ones_mask * max(flo1.shape[2], flo1.shape[3]))[gap1]
+            max_dim0 = max(flo0.shape[2], flo0.shape[3])
+            max_dim1 = max(flo1.shape[2], flo1.shape[3])
+            wflo0[gap0] = (ones_mask * max_dim0)[gap0]
+            wflo1[gap1] = (ones_mask * max_dim1)[gap1]
 
             flo0 = wflo0 * 2
             flo1 = wflo1 * 2
@@ -581,20 +441,16 @@ def drba_rife(
             d10 = distance_calculator(flo0) + 1e-4
             d12 = distance_calculator(flo1) + 1e-4
 
-            drm10 = d10 / (d10 + d12)
             drm12 = d12 / (d10 + d12)
-
             drm_t1_unaligned = drm12 * (1 - t) * 2
 
-            ones_mask = drm10.clone() * 0 + 1
-            drm_t1_t01 = fwarp(torch.cat((drm_t1_unaligned, ones_mask), dim=1), flo0 * drm_t1_unaligned, None, 'avg')
-            mask_t1_t01 = drm_t1_t01[:, 1:]
-            gap_t1_t01 = mask_t1_t01 < 0.999
+            ones_mask_1ch = torch.ones_like(drm_t1_unaligned)
+            drm_t1_t01 = fwarp(torch.cat((drm_t1_unaligned, ones_mask_1ch), dim=1), flo0 * drm_t1_unaligned, None, 'avg')
+            gap_t1_t01 = drm_t1_t01[:, 1:] < 0.999
             drm_t1_t01 = drm_t1_t01[:, :1]
             drm_t1_t01[gap_t1_t01] = drm_t1_unaligned[gap_t1_t01]
 
-            drm = F.interpolate(drm_t1_t01, size=(img1.shape[2], img1.shape[3]), mode="bilinear",
-                                       align_corners=False)
+            drm = F.interpolate(drm_t1_t01, size=(img1.shape[2], img1.shape[3]), mode="bilinear", align_corners=False)
 
             if Head is not None:
                 output = flownet(img1, img0, drm, f1, f0)
@@ -609,10 +465,7 @@ def drba_rife(
 
             return tensor_to_frame(output, f[0].copy(), inf_t2f_stream)
 
-    if Head is not None:
-        encoded = clip.std.FrameEval(lambda n: clip.std.ModifyFrame(clip, encoding), clip_src=clip)
-    else:
-        encoded = clip
+    encoded = clip.std.FrameEval(lambda n: clip.std.ModifyFrame(clip, encoding), clip_src=clip) if Head is not None else clip
 
     clip0 = vs.core.std.Interleave([encoded] * factor_num)
     clip1 = encoded.std.DuplicateFrames(encoded.num_frames - 1)[1:]
@@ -624,8 +477,10 @@ def drba_rife(
         clip1 = clip1[::factor_den]
         clip2 = clip2[::factor_den]
 
-    return clip0.std.FrameEval(lambda n: clip0.std.ModifyFrame([clip0, clip1, clip2], inference),
-                               clip_src=[clip0, clip1, clip2])
+    return clip0.std.FrameEval(
+        lambda n: clip0.std.ModifyFrame([clip0, clip1, clip2], inference),
+        clip_src=[clip0, clip1, clip2],
+    )
 
 
 def init_module(
@@ -636,7 +491,7 @@ def init_module(
         device: torch.device,
         dtype: torch.dtype,
         Head: nn.Module | nn.Sequential | None,
-) -> tuple[nn.Module, nn.Module | None]:
+) -> tuple[nn.Module, nn.Module | None, nn.Module]:
     state_dict = torch.load(os.path.join(model_dir, model_name), map_location="cpu", weights_only=True, mmap=True)
     state_dict = {k.replace("module.", ""): v for k, v in state_dict.items() if "module." in k}
     state_dict_block0 = {k: v for k, v in state_dict.items() if "block0." in k}
@@ -651,7 +506,6 @@ def init_module(
 
     if Head is not None:
         encode_state_dict = {k.replace("encode.", ""): v for k, v in state_dict.items() if "encode." in k}
-
         if isinstance(Head, nn.Sequential):
             encode = Head
         else:
@@ -659,7 +513,6 @@ def init_module(
                 encode = Head()
         encode.load_state_dict(encode_state_dict, assign=True)
         encode.eval().to(device, dtype)
-
         return flownet, encode, block0
 
     return flownet, None, block0
@@ -672,8 +525,9 @@ def sc_detect(clip: vs.VideoNode, threshold: float) -> vs.VideoNode:
         fout.props["_SceneChangeNext"] = f[1].props["_SceneChangeNext"]
         return fout
 
-    sc_clip = clip.resize.Bicubic(format=vs.GRAY8, matrix_s="709").misc.SCDetect(threshold)
-    return clip.std.FrameEval(lambda n: clip.std.ModifyFrame([clip, sc_clip], copy_property), clip_src=[clip, sc_clip])
+    sc_clip = clip.resize.Bicubic(format=vs.GRAY8, matrix_s="709")
+    sc_clip = vs.core.scd.Detect(sc_clip, thresh=int(threshold))
+    return clip.std.ModifyFrame([clip, sc_clip], copy_property)
 
 
 def frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor:
@@ -688,13 +542,10 @@ def frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor:
 def tensor_to_frame(tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream) -> vs.VideoFrame:
     tensor = tensor.squeeze(0).detach()
     tensors = [tensor[plane].to("cpu", non_blocking=True) for plane in range(frame.format.num_planes)]
-
     stream.synchronize()
-
     for plane in range(frame.format.num_planes):
         np.copyto(np.asarray(frame[plane]), tensors[plane].numpy())
     return frame
 
 
-# GMFSS Union is exposed separately from the RIFE model selector.
 from .gmfss_union import drba_gmfss
