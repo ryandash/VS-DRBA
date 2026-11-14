@@ -2,115 +2,56 @@ import torch
 from .softsplat import softsplat as warp
 from .utils import distance_calculator
 
-def get_drm_t(drm, t, precision=1e-3):
+_bounds_cache: dict[tuple[str, tuple[int, ...], torch.dtype], tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def _get_cached_bounds(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    key = (str(tensor.device), tuple(tensor.shape), tensor.dtype)
+    cached = _bounds_cache.get(key)
+    if cached is None:
+        zeros = torch.zeros(tensor.shape, device=tensor.device, dtype=tensor.dtype)
+        ones = torch.ones(tensor.shape, device=tensor.device, dtype=tensor.dtype)
+        cached = (zeros, ones)
+        _bounds_cache[key] = cached
+    return cached
+
+
+def get_drm_t(drm: torch.Tensor, t: float, precision: float = 1e-3) -> torch.Tensor:
     """
     DRM is a tensor with dimensions b, 1, h, w, where for any value x (0 < x < 1).
     We define the timestep of the entire DRM tensor as 0.5, want the entire DRM approach t,
     but during this process, all values in the tensor must maintain their original proportions.
-
-    Example:
-        Input:
-            drm = [0.1, 0.7, 0.4, 0.2, ...]
-            init_t = 0.5
-            target_t = 0.8
-
-        Iteration Outputs:
-            [0.1900(0.1 + (1 - 0.1) * 0.1), 0.9100, ...]  t = 0.5 + (1 - 0.5) * 0.5 = 0.75\n
-            [0.2710(0.19 + (1 - 0.19) * 0.1), 0.9730, ...]  t = 0.75 + (1 - 0.75) * 0.5 = 0.875\n
-            [0.2629(0.271 - (0.271 - 0.19) * 0.1), 0.9289, ...]  t = 0.875 - (0.875 - 0.75) * 0.5 = 0.8125\n
-            [0.2556(0.2629 - (0.2629 - 0.19) * 0.1), 0.9157, ...]  t = 0.8125 - (0.8125 - 0.75) * 0.5 = 0.78125\n
-            [0.2563(0.2556 + (0.2629 - 0.2556) * 0.1), 0.9249, ...]  t = 0.78125 + (0.8125 - 0.78125) * 0.5 = 0.796875\n
-            [0.2570(0.2563 + (0.2629 - 0.2563) * 0.1), 0.9277, ...]  t = 0.796875 + (0.8125 - 0.796875) * 0.5 = 0.8046875\n
-            ...
-
-        Final Output:
-            drm_t = [0.2569, 0.9258, 0.7106, 0.4486, ...]  t = 0.80078125
     """
     dtype = drm.dtype
 
     _x, b = 0.5, 0.5
-    l, r = 0, 1
+    l, r = 0.0, 1.0
 
-    # float is suggested for drm calculation to avoid overflow
-    x_drm, b_drm = drm.float().clone(), drm.float().clone()
-    l_drm, r_drm = x_drm.clone() * 0, x_drm.clone() * 0 + 1
+    d = drm.float()
+    x_drm = d.clone()
+    l_drm, r_drm = _get_cached_bounds(d)
 
     while abs(_x - t) > precision:
         if _x > t:
             r = _x
-            # print(f"{_x} - ({_x} - {l}) * {b}")
             _x = _x - (_x - l) * b
 
-            r_drm = x_drm.clone()
-            x_drm = x_drm - (x_drm - l_drm) * b_drm
-            # print(_x, x_drm)
-
-        if _x < t:
+            r_drm = x_drm
+            x_drm = x_drm - (x_drm - l_drm) * d
+        else:
             l = _x
-            # print(f"{_x} + ({r} - {_x}) * {b}")
             _x = _x + (r - _x) * b
 
-            l_drm = x_drm.clone()
-            x_drm = x_drm + (r_drm - x_drm) * b_drm
-            # print(_x, x_drm)
+            l_drm = x_drm
+            x_drm = x_drm + (r_drm - x_drm) * d
 
     return x_drm.to(dtype)
 
 
-def calc_drm_rife(t, flow10, flow12, linear=False):
-    # Compute the distance using the optical flow and distance calculator
-    d10 = distance_calculator(flow10) + 1e-4
-    d12 = distance_calculator(flow12) + 1e-4
-
-    # Calculate the distance ratio map
-    drm10 = d10 / (d10 + d12)
-    drm12 = d12 / (d10 + d12)
-
-    if linear:
-        drm_t0_unaligned = drm10 * t * 2
-        drm_t1_unaligned = drm12 * t * 2
-    else:
-        drm_t0_unaligned = get_drm_t(drm10, t)
-        drm_t1_unaligned = get_drm_t(drm12, t)
-
-    warp_method = 'avg'
-    # When using RIFE to generate intermediate frames between I0 and I1,
-    # if the input image order is I0, I1, you need to use drm_t_I0_t01.
-    # Conversely, if the order is reversed, you should use drm_t_I1_t01.
-    # The same rule applies when processing intermediate frames between I1 and I2.
-
-    # For RIFE, drm should be aligned with the time corresponding to the intermediate frame.
-    # drm_t0_t01 = warp(drm_t0_unaligned, flow10 * drm_t0_unaligned, None, warp_method)
-    ones_mask = torch.ones_like(drm10)
-    warped_t01 = warp(
-        torch.cat((drm_t1_unaligned, ones_mask), dim=1),
-        flow10 * drm_t1_unaligned, None, warp_method,
-    )
-    drm_t1_t01, mask_t1_t01 = warped_t01.split(1, dim=1)
-    warped_t12 = warp(
-        torch.cat((drm_t0_unaligned, ones_mask), dim=1),
-        flow12 * drm_t0_unaligned, None, warp_method,
-    )
-    drm_t1_t12, mask_t1_t12 = warped_t12.split(1, dim=1)
-
-    gap_t1_t01 = mask_t1_t01 < 0.999
-    gap_t1_t12 = mask_t1_t12 < 0.999
-
-    drm_t1_t01 = torch.where(gap_t1_t01, drm_t1_unaligned, drm_t1_t01)
-    drm_t1_t12 = torch.where(gap_t1_t12, drm_t0_unaligned, drm_t1_t12)
-
-    return {
-        "drm_t1_t01": drm_t1_t01,
-        "drm_t1_t12": drm_t1_t12
-    }
-
-
 def calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear=False):
-    # Compute the distance using the optical flow and distance calculator
     d10 = distance_calculator(flow10)
     d12 = distance_calculator(flow12)
 
-    # Calculate the distance ratio map
     drm10 = d10 / (d10 + d12)
     drm12 = d12 / (d10 + d12)
 
@@ -127,9 +68,7 @@ def calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear=False):
         drm0t_t01_unaligned = 1 - drm1t_t01
         drm2t_t12_unaligned = 1 - drm1t_t12
 
-    # Warp each DRM map together with its all-ones coverage channel. The
-    # shared SoftSplat normalization preserves the original mask values.
-    ones_mask = torch.ones_like(drm0t_t01_unaligned)
+    _, ones_mask = _get_cached_bounds(drm0t_t01_unaligned)
     warped0 = warp(
         torch.cat((drm0t_t01_unaligned, ones_mask), dim=1),
         flow10, metric10, warp_method,
@@ -141,11 +80,9 @@ def calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear=False):
     )
     drm2t_t12, warped_ones_mask2t_t12 = warped2.split(1, dim=1)
 
-    # Identify holes in warped drm map
     gap_0t_t01 = warped_ones_mask0t_t01 < 0.999
     gap_2t_t12 = warped_ones_mask2t_t12 < 0.999
 
-    # Fill the holes in the warped drm maps with the inverse of the original drm maps
     drm0t_t01 = torch.where(gap_0t_t01, drm0t_t01_unaligned, drm0t_t01)
     drm2t_t12 = torch.where(gap_2t_t12, drm2t_t12_unaligned, drm2t_t12)
 
@@ -158,11 +95,9 @@ def calc_drm_gmfss(t, flow10, flow12, metric10, metric12, linear=False):
 
 
 def calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear=False):
-    # Compute the distance using the optical flow and distance calculator
     d10 = distance_calculator(flow10) + 1e-4
     d12 = distance_calculator(flow12) + 1e-4
 
-    # Calculate the distance ratio map
     drm10 = d10 / (d10 + d12)
     drm12 = d12 / (d10 + d12)
 
@@ -175,8 +110,7 @@ def calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear=False)
 
     warp_method = 'soft' if (metric10 is not None and metric12 is not None) else 'avg'
 
-    # Fuse each DRM warp with its matching coverage-mask warp.
-    ones_mask = torch.ones_like(drm10)
+    _, ones_mask = _get_cached_bounds(drm10)
     warped_t01 = warp(
         torch.cat((drm_t1_unaligned, ones_mask), dim=1),
         flow10 * drm_t1_unaligned, metric10, warp_method,
@@ -194,7 +128,6 @@ def calc_drm_rife_auxiliary(t, flow10, flow12, metric10, metric12, linear=False)
     drm_t1_t01 = torch.where(gap_t1_t01, drm_t1_unaligned, drm_t1_t01)
     drm_t1_t12 = torch.where(gap_t1_t12, drm_t0_unaligned, drm_t1_t12)
 
-    # why use drm0t1 not drm1t0, because rife use backward warp not forward warp.
     return {
         "drm_t1_t01": drm_t1_t01,
         "drm_t1_t12": drm_t1_t12

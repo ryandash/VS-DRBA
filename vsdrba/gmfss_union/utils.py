@@ -9,16 +9,6 @@ import torch
 import torch.nn.functional as F
 
 
-def check_cupy_env() -> bool:
-    """Return whether CuPy can locate a CUDA toolkit for its runtime kernels."""
-    try:
-        import cupy
-
-        return cupy.cuda.get_cuda_path() is not None
-    except Exception:
-        return False
-
-
 def resize(tensor: torch.Tensor, size) -> torch.Tensor:
     return F.interpolate(tensor, size=size, mode="bilinear", align_corners=False)
 

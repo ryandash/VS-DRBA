@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import math
 import os
@@ -17,46 +18,51 @@ import vapoursynth as vs
 from .model import GMFSS_UNION
 
 
+class _PinnedFrameTransfer:
+    """Persistent pinned CPU buffer to avoid per-frame cudaHostAlloc stalls."""
+
+    def __init__(self, shape: tuple[int, int, int], dtype: torch.dtype):
+        self.shape = shape
+        self.dtype = dtype
+        self.cpu_tensor = torch.empty(
+            shape, dtype=dtype, device="cpu", pin_memory=True
+        )
+        self.cpu_numpy = self.cpu_tensor.numpy()
+
+    def copy_to_frame(
+        self, tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream
+    ) -> vs.VideoFrame:
+        tensor = tensor.detach().squeeze(0)
+        if tuple(tensor.shape) != self.shape:
+            raise vs.Error(
+                f"gmfss: model returned tensor shape {tuple(tensor.shape)}; "
+                f"expected {self.shape}"
+            )
+        if tensor.dtype != self.dtype:
+            tensor = tensor.to(self.dtype)
+
+        self.cpu_tensor.copy_(tensor.contiguous(), non_blocking=True)
+        stream.synchronize()
+
+        output = frame.copy()
+        for i in range(frame.format.num_planes):
+            destination = np.asarray(output[i])
+            source = self.cpu_numpy[i]
+            if source.shape != destination.shape:
+                raise vs.Error(
+                    f"gmfss: output plane {i} has shape {source.shape}; "
+                    f"expected {destination.shape}"
+                )
+            np.copyto(destination, source, casting="no")
+        return output
+
+
 def _frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor:
     planes = [
         torch.from_numpy(np.asarray(frame[plane])).to(device, non_blocking=True)
         for plane in range(frame.format.num_planes)
     ]
     return torch.stack(planes).unsqueeze(0)
-
-
-def _tensor_to_frame(
-    tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream
-) -> vs.VideoFrame:
-    # TensorRT's default runtime may launch work on auxiliary CUDA streams.
-    # Synchronize the device, not only the VapourSynth callback stream, before
-    # exposing the result to NumPy/VapourSynth.
-    torch.cuda.synchronize(tensor.device)
-    tensor = tensor.detach().squeeze(0)
-    expected_shape = (frame.format.num_planes, frame.height, frame.width)
-    if tuple(tensor.shape) != expected_shape:
-        raise vs.Error(
-            f"gmfss: model returned tensor shape {tuple(tensor.shape)}; "
-            f"expected {expected_shape}"
-        )
-    # Transfer the complete output once. Per-plane asynchronous copies followed
-    # by .numpy() caused repeated host synchronization on every output frame.
-    cpu_tensor = tensor.to(device="cpu", non_blocking=False).contiguous()
-    cpu_output = cpu_tensor.numpy()
-    if not np.isfinite(cpu_output).all():
-        raise vs.Error("gmfss: TensorRT/PyTorch produced NaN or infinite output values")
-
-    output = frame.copy()
-    for i in range(frame.format.num_planes):
-        destination = np.asarray(output[i])
-        source = cpu_output[i]
-        if source.shape != destination.shape:
-            raise vs.Error(
-                f"gmfss: output plane {i} has shape {source.shape}; "
-                f"expected {destination.shape}"
-            )
-        np.copyto(destination, source, casting="no")
-    return output
 
 
 def drba_gmfss(
@@ -76,17 +82,7 @@ def drba_gmfss(
     profile_dir: str | os.PathLike | None = None,
     trt_cache_dir: str | os.PathLike | None = None,
 ) -> vs.VideoNode:
-    """Interpolate an RGB VapourSynth clip with GMFSS Union.
-
-    With trt=True, selected convolutional modules use TensorRT-RTX. DRM,
-    SoftSplat, GMFlow transformer/matching, and VapourSynth orchestration remain
-    outside the engine boundary by design. RTX import/build failures are fatal.
-    Set profile_dir to write one Chrome trace JSON per processed output frame.
-    Set trt_cache_dir to control where TensorRT-RTX runtime JIT caches are stored.
-
-    The auxiliary RIFE model loads the standard flownet_v4.25.pkl checkpoint
-    from vsdrba/models by default. Use rife_weights to override its location.
-    """
+    """Interpolate an RGB VapourSynth clip with GMFSS Union."""
     if not isinstance(clip, vs.VideoNode):
         raise vs.Error("gmfss: input is not a VapourSynth clip")
     if clip.format is None or clip.format.id not in (vs.RGBH, vs.RGBS):
@@ -114,9 +110,9 @@ def drba_gmfss(
         factor_num, factor_den = factor.as_integer_ratio()
     if factor_num <= factor_den:
         raise vs.Error("gmfss: target frame rate must be higher than source frame rate")
+
     package_weights = Path(__file__).resolve().parent / "weights" / "train_log_gmfss_union"
     if not package_weights.is_dir():
-        # Source checkout layout keeps the checkpoints at repository-root weights/.
         package_weights = Path(__file__).resolve().parents[2] / "weights" / "train_log_gmfss_union"
     weights_path = Path(weights).expanduser() if weights is not None else package_weights
     if not weights_path.is_dir():
@@ -139,7 +135,6 @@ def drba_gmfss(
 
     if sc and sc_threshold is not None:
         scene_clip = clip.resize.Bicubic(format=vs.GRAY8, matrix_s="709").misc.SCDetect(sc_threshold)
-
         source_clip = clip
 
         def copy_scene_props(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
@@ -161,6 +156,7 @@ def drba_gmfss(
         cache_identity.update(str(stat.st_size).encode("ascii"))
         cache_identity.update(str(stat.st_mtime_ns).encode("ascii"))
     cache_identity.update(str(scale).encode("ascii"))
+
     try:
         model = GMFSS_UNION(
             weights=str(weights_path), scale=scale, device=device, trt=trt,
@@ -171,6 +167,7 @@ def drba_gmfss(
         if trt:
             raise vs.Error(f"gmfss: TensorRT-RTX initialization failed: {exc}") from exc
         raise
+
     profile_path = Path(profile_dir).expanduser() if profile_dir is not None else None
     if profile_path is not None:
         profile_path.mkdir(parents=True, exist_ok=True)
@@ -182,13 +179,27 @@ def drba_gmfss(
     stream = torch.cuda.Stream(device=device)
     inference_lock = Lock()
 
+    frame_dtype = torch.float16 if clip.format.id == vs.RGBH else torch.float32
+    pinned_transfer = _PinnedFrameTransfer(
+        (clip.format.num_planes, height, width), frame_dtype
+    )
+
+    # Bounded LRU cache (max 3 entries) to reuse flow/feature pyramids across both
+    # current sub-frames (factor_num > 2) and sequential frame intervals without leaking VRAM.
+    reuse_cache: OrderedDict[tuple[int, int], list] = OrderedDict()
+
     @torch.inference_mode()
     def interpolate(n: int, f: list[vs.VideoFrame]) -> vs.VideoFrame:
         t = (n * factor_den % factor_num) / factor_num
         if t == 0 or (sc and f[0].props.get("_SceneChangeNext", 0)):
             return f[0]
 
+        real_n = (n * factor_den) // factor_num
+        real_n_next = min(real_n + 1, clip.num_frames - 1)
+        real_n_next_next = min(real_n_next + 1, clip.num_frames - 1)
+
         with inference_lock, torch.cuda.stream(stream):
+            prior_reuse = reuse_cache.get((real_n, real_n_next))
             image0, image1, image2 = [
                 _frame_to_tensor(frame, device) for frame in f
             ]
@@ -198,8 +209,14 @@ def drba_gmfss(
                 image2 = F.pad(image2, padding)
 
             if profile_path is None:
-                outputs, _ = model.inference_ts_drba(
-                    image0, image1, image2, [t], linear=linear
+                outputs, next_reuse, current_reuse = model.inference_ts_drba(
+                    image0,
+                    image1,
+                    image2,
+                    [t],
+                    reuse=prior_reuse,
+                    linear=linear,
+                    return_current_reuse=True,
                 )
             else:
                 activities = [
@@ -211,17 +228,30 @@ def drba_gmfss(
                     record_shapes=True,
                     profile_memory=True,
                 ) as profiler:
-                    outputs, _ = model.inference_ts_drba(
-                        image0, image1, image2, [t], linear=linear
+                    outputs, next_reuse, current_reuse = model.inference_ts_drba(
+                        image0,
+                        image1,
+                        image2,
+                        [t],
+                        reuse=prior_reuse,
+                        linear=linear,
+                        return_current_reuse=True,
                     )
-                torch.cuda.synchronize(device)
+                stream.synchronize()
                 profiler.export_chrome_trace(
                     str(profile_path / f"gmfss_frame_{n:06d}.json")
                 )
+
+            reuse_cache[(real_n, real_n_next)] = current_reuse
+            if real_n_next < real_n_next_next:
+                reuse_cache[(real_n_next, real_n_next_next)] = next_reuse
+            while len(reuse_cache) > 3:
+                reuse_cache.popitem(last=False)
+
             output = outputs[0]
             if any(padding):
                 output = output[:, :, :height, :width]
-            return _tensor_to_frame(output, f[0], stream)
+            return pinned_transfer.copy_to_frame(output, f[0], stream)
 
     clip0 = vs.core.std.Interleave([clip] * factor_num)
     clip1 = clip.std.DuplicateFrames(clip.num_frames - 1)[1:]

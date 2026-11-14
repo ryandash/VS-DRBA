@@ -1,12 +1,13 @@
 # VS-DRBA WIP with some bugs
+
 Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routineLife1/DRBA and https://github.com/HolyWu/vs-rife.
 
 > This project is modified from [HolyWu/vs-rife](https://github.com/HolyWu/vs-rife) and achieves nearly the same interpolation quality as the original [DRBA](https://github.com/routineLife1/DRBA) project.
 >
 > With TensorRT-RTX integration, it targets accelerated inference, enabling real-time playback on high-performance NVIDIA GPUs.
->
 
 ## Dependencies
+
 - [PyTorch](https://pytorch.org/get-started/) 2.11.x (CUDA 12.9 build for the documented RTX setup)
 - [VapourSynth](http://www.vapoursynth.com/) R66 or later
 - [vs-miscfilters-obsolete](https://github.com/vapoursynth/vs-miscfilters-obsolete) (only needed for scene change detection)
@@ -15,14 +16,17 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 `trt=True` requires [TensorRT-RTX](https://developer.nvidia.com/tensorrt-rtx) and [Torch-TensorRT-RTX](https://docs.pytorch.org/TensorRT/getting_started/tensorrt_rtx.html). Standard TensorRT is not supported by this branch. The documented Windows configuration uses Python 3.13, PyTorch 2.11, and CUDA 12.9.
 
 ## Installation
+
 ```
 python -m pip install hatchling
 python -m pip install -U "vsdrba @ git+https://github.com/ryandash/VS-DRBA.git"
 python -m vsdrba
 ```
+
 The supported RIFE checkpoints are 4.25, 4.26, and 4.26 Heavy. To download these checkpoints, run `python -m vsdrba`. GMFSS Union is implemented in the `vsdrba/gmfss_union` package on this branch.
 
 ## Usage
+
 ```python
 from vsdrba import drba_rife
 
@@ -37,22 +41,22 @@ clip = drba_rife(
     trt_optimization_level=5
 )
 ```
-or
-```python
-from vsgmfss_fortuna import gmfss_fortuna
 
-clip = gmfss_fortuna(
+or
+
+```python
+from vsdrba import drba_gmfss
+
+clip = drba_gmfss(
     clip,
     factor_num=2,
     factor_den=1,
-    model=1,
-    scale=1.0,
+    scale=0.5,
     sc=True,
     sc_threshold=0.15,
-    num_streams=1,
-    trt=True,
-    trt_optimization_level=5
+    trt=True
 )
+
 ```
 
 See `__init__.py` for the description of the parameters.
