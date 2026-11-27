@@ -29,7 +29,6 @@ classifiers = [
 dependencies = [
   "numpy",
   "requests",
-  "torch>=2.6.0",
   "tqdm",
   "VapourSynth>=66",
 ]
@@ -37,3 +36,10 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/routineLife1/VS-DRBA"
 Issues = "https://github.com/routineLife1/VS-DRBA/issues"
+[project.optional-dependencies]
+cuda = [
+  "torch",
+  "torchvision",
+  "torch-tensorrt",
+  "cupy-cuda13x",
+]
