@@ -910,20 +910,23 @@ def sc_detect(clip: vs.VideoNode, threshold: float) -> vs.VideoNode:
 
 
 def frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor:
-    return torch.stack(
-        [
-            torch.from_numpy(np.asarray(frame[plane])).to(device, non_blocking=True)
-            for plane in range(frame.format.num_planes)
-        ]
-    ).unsqueeze(0)
+    # Pack the planar RGB frame into one contiguous host buffer before H2D.
+    # This replaces one transfer per plane plus a GPU-side stack with one H2D transfer.
+    planes = np.stack(
+        [np.asarray(frame[plane]) for plane in range(frame.format.num_planes)],
+        axis=0,
+    )
+    return torch.from_numpy(planes).unsqueeze(0).to(device, non_blocking=True)
 
 
 def tensor_to_frame(tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream) -> vs.VideoFrame:
-    tensor = tensor.squeeze(0).detach()
-    tensors = [tensor[plane].to("cpu", non_blocking=True) for plane in range(frame.format.num_planes)]
-
+    # Copy all output planes to host in one D2H transfer, then scatter into the
+    # VapourSynth frame planes after the transfer has completed.
+    host_tensor = tensor.squeeze(0).detach().to("cpu", non_blocking=True)
     stream.synchronize()
 
+    host_array = host_tensor.numpy()
     for plane in range(frame.format.num_planes):
-        np.copyto(np.asarray(frame[plane]), tensors[plane].numpy())
+        np.copyto(np.asarray(frame[plane]), host_array[plane])
     return frame
+
