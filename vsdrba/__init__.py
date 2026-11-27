@@ -670,6 +670,11 @@ def drba_rife(
 
     torch.cuda.current_stream(device).synchronize()
 
+    # The interpolation timestep is constant for every output frame. Allocate it
+    # once rather than launching a fill operation and allocating a tensor per frame.
+    t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
+    torch.cuda.current_stream(device).synchronize()
+
     frame_cache = {}
     encode_cache = {}
 
@@ -779,7 +784,6 @@ def drba_rife(
         # Queue inference behind H2D work without blocking the VapourSynth worker thread.
         with inf_stream_lock, torch.cuda.stream(inf_stream):
             inf_stream.wait_stream(inf_f2t_stream)
-            t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
             if Head is not None:
                 # flo0 -> 0.5 -> 1
                 # flo1 -> 1.5 -> 1
@@ -789,7 +793,7 @@ def drba_rife(
                 flo0 = block0(img1, img0, t05)[:, :2]
                 flo1 = block0(img1, img2, t05)[:, :2]
 
-            ones_mask = flo0.clone() * 0 + 1
+            ones_mask = torch.ones_like(flo0)
             cflo0 = torch.cat((flo0, ones_mask), dim=1)
             cflo1 = torch.cat((flo1, ones_mask), dim=1)
 
@@ -819,7 +823,7 @@ def drba_rife(
 
             drm_t1_unaligned = drm12 * (1 - t) * 2
 
-            ones_mask = drm10.clone() * 0 + 1
+            ones_mask = torch.ones_like(drm10)
             drm_t1_t01 = fwarp(torch.cat((drm_t1_unaligned, ones_mask), dim=1), flo0 * drm_t1_unaligned, None, 'avg')
             mask_t1_t01 = drm_t1_t01[:, 1:]
             gap_t1_t01 = mask_t1_t01 < 0.999
