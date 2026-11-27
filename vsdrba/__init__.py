@@ -776,9 +776,9 @@ def drba_rife(
                     img1 = F.pad(img1, padding)
                     img2 = F.pad(img2, padding)
 
-            inf_f2t_stream.synchronize()
-
+        # Queue inference behind H2D work without blocking the VapourSynth worker thread.
         with inf_stream_lock, torch.cuda.stream(inf_stream):
+            inf_stream.wait_stream(inf_f2t_stream)
             t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
             if Head is not None:
                 # flo0 -> 0.5 -> 1
@@ -834,9 +834,9 @@ def drba_rife(
             else:
                 output = flownet(img1, img0, drm)
 
-            inf_stream.synchronize()
-
+        # Queue D2H behind inference without a host-side synchronization point.
         with inf_t2f_stream_lock, torch.cuda.stream(inf_t2f_stream):
+            inf_t2f_stream.wait_stream(inf_stream)
             if need_pad:
                 output = output[:, :, :h, :w]
 
