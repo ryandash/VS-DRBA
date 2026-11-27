@@ -453,7 +453,7 @@ def drba_rife(
         clip = sc_detect(clip, sc_threshold)
 
     if trt:
-        import tensorrt
+        import tensorrt_rtx as tensorrt
         import torch_tensorrt
 
         if trt_static_shape:
