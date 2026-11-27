@@ -483,7 +483,7 @@ def drba_rife(
                     + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
                     + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
                     + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ep"
+                    + ".pt2"
             ),
         )
 
@@ -500,11 +500,11 @@ def drba_rife(
                     + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
                     + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
                     + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ep0"
+                    + ".block0.pt2"
             ),
         )
 
-        encode_engine_path = flownet_engine_path + ".encode"
+        encode_engine_path = flownet_engine_path.removesuffix(".pt2") + ".encode.pt2"
 
         if not os.path.isfile(flownet_engine_path) or (Head is not None and not os.path.isfile(encode_engine_path)):
             from torch_tensorrt.dynamo.conversion.impl.grid import GridSamplerInterpolationMode
@@ -629,7 +629,6 @@ def drba_rife(
                     encode_program,
                     encode_inputs,
                     device=device,
-                    enabled_precisions={dtype},
                     num_avg_timing_iters=4,
                     workspace_size=trt_workspace_size,
                     min_block_size=1,
