@@ -685,10 +685,6 @@ def drba_rife(
             frame_cache[n] = img
 
         with enc_stream_lock, torch.cuda.stream(enc_stream):
-
-            # Order feature extraction after the H2D upload without blocking
-            # the VapourSynth worker thread.
-            enc_stream.wait_stream(enc_f2t_stream)
             output = encode(img)
 
             encode_cache[n] = output
