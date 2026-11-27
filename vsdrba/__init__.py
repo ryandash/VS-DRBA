@@ -483,7 +483,7 @@ def drba_rife(
                     + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
                     + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
                     + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ts"
+                    + ".pt2"
             ),
         )
 
@@ -500,11 +500,11 @@ def drba_rife(
                     + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
                     + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
                     + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ts0"
+                    + ".block0.pt2"
             ),
         )
 
-        encode_engine_path = flownet_engine_path + ".encode"
+        encode_engine_path = flownet_engine_path.removesuffix(".pt2") + ".encode.pt2"
 
         if not os.path.isfile(flownet_engine_path) or (Head is not None and not os.path.isfile(encode_engine_path)):
             from torch_tensorrt.dynamo.conversion.impl.grid import GridSamplerInterpolationMode
@@ -592,16 +592,14 @@ def drba_rife(
                 flownet_program,
                 flownet_inputs,
                 device=device,
-                debug=trt_debug,
                 num_avg_timing_iters=4,
                 workspace_size=trt_workspace_size,
                 min_block_size=1,
                 max_aux_streams=trt_max_aux_streams,
                 optimization_level=trt_optimization_level,
-                use_explicit_typing=True,
             )
 
-            torch_tensorrt.save(flownet, flownet_engine_path, output_format="torchscript", inputs=flownet_inputs)
+            torch_tensorrt.save(flownet, flownet_engine_path, inputs=flownet_inputs)
 
             block0_program = torch.export.export(
                 block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
@@ -611,17 +609,15 @@ def drba_rife(
                 block0_program,
                 flownet_inputs,
                 device=device,
-                debug=trt_debug,
                 num_avg_timing_iters=4,
                 workspace_size=trt_workspace_size,
                 min_block_size=1,
                 max_aux_streams=trt_max_aux_streams,
                 optimization_level=trt_optimization_level,
-                use_explicit_typing=True,
             )
 
             torch_tensorrt.save(
-                block0, block0_engine_path, output_format="torchscript", inputs=flownet_inputs
+                block0, block0_engine_path, inputs=flownet_inputs
             )
 
             if encode is not None:
@@ -633,8 +629,6 @@ def drba_rife(
                     encode_program,
                     encode_inputs,
                     device=device,
-                    enabled_precisions={dtype},
-                    debug=trt_debug,
                     num_avg_timing_iters=4,
                     workspace_size=trt_workspace_size,
                     min_block_size=1,
@@ -643,13 +637,13 @@ def drba_rife(
                 )
 
                 torch_tensorrt.save(
-                    encode, encode_engine_path, output_format="torchscript", inputs=encode_inputs
+                    encode, encode_engine_path, inputs=encode_inputs
                 )
 
-        flownet = torch.jit.load(flownet_engine_path).eval()
-        block0 = torch.jit.load(block0_engine_path).eval()
+        flownet = torch.export.load(flownet_engine_path).module()
+        block0 = torch.export.load(block0_engine_path).module()
         if Head is not None:
-            encode = torch.jit.load(encode_engine_path).eval()
+            encode = torch.export.load(encode_engine_path).module()
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
@@ -668,6 +662,11 @@ def drba_rife(
         enc_stream_lock = Lock()
         enc_f2t_stream_lock = Lock()
 
+    torch.cuda.current_stream(device).synchronize()
+
+    # The interpolation timestep is constant for every output frame. Allocate it
+    # once rather than launching a fill operation and allocating a tensor per frame.
+    t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
     torch.cuda.current_stream(device).synchronize()
 
     frame_cache = {}
@@ -776,10 +775,9 @@ def drba_rife(
                     img1 = F.pad(img1, padding)
                     img2 = F.pad(img2, padding)
 
-            inf_f2t_stream.synchronize()
-
+        # Queue inference behind H2D work without blocking the VapourSynth worker thread.
         with inf_stream_lock, torch.cuda.stream(inf_stream):
-            t05 = torch.full([1, 1, ph, pw], 0.5, dtype=dtype, device=device)
+            inf_stream.wait_stream(inf_f2t_stream)
             if Head is not None:
                 # flo0 -> 0.5 -> 1
                 # flo1 -> 1.5 -> 1
@@ -789,7 +787,7 @@ def drba_rife(
                 flo0 = block0(img1, img0, t05)[:, :2]
                 flo1 = block0(img1, img2, t05)[:, :2]
 
-            ones_mask = flo0.clone() * 0 + 1
+            ones_mask = torch.ones_like(flo0)
             cflo0 = torch.cat((flo0, ones_mask), dim=1)
             cflo1 = torch.cat((flo1, ones_mask), dim=1)
 
@@ -819,7 +817,7 @@ def drba_rife(
 
             drm_t1_unaligned = drm12 * (1 - t) * 2
 
-            ones_mask = drm10.clone() * 0 + 1
+            ones_mask = torch.ones_like(drm10)
             drm_t1_t01 = fwarp(torch.cat((drm_t1_unaligned, ones_mask), dim=1), flo0 * drm_t1_unaligned, None, 'avg')
             mask_t1_t01 = drm_t1_t01[:, 1:]
             gap_t1_t01 = mask_t1_t01 < 0.999
@@ -834,9 +832,9 @@ def drba_rife(
             else:
                 output = flownet(img1, img0, drm)
 
-            inf_stream.synchronize()
-
+        # Queue D2H behind inference without a host-side synchronization point.
         with inf_t2f_stream_lock, torch.cuda.stream(inf_t2f_stream):
+            inf_t2f_stream.wait_stream(inf_stream)
             if need_pad:
                 output = output[:, :, :h, :w]
 
@@ -910,20 +908,23 @@ def sc_detect(clip: vs.VideoNode, threshold: float) -> vs.VideoNode:
 
 
 def frame_to_tensor(frame: vs.VideoFrame, device: torch.device) -> torch.Tensor:
-    return torch.stack(
-        [
-            torch.from_numpy(np.asarray(frame[plane])).to(device, non_blocking=True)
-            for plane in range(frame.format.num_planes)
-        ]
-    ).unsqueeze(0)
+    # Pack the planar RGB frame into one contiguous host buffer before H2D.
+    # This replaces one transfer per plane plus a GPU-side stack with one H2D transfer.
+    planes = np.stack(
+        [np.asarray(frame[plane]) for plane in range(frame.format.num_planes)],
+        axis=0,
+    )
+    return torch.from_numpy(planes).unsqueeze(0).to(device, non_blocking=True)
 
 
 def tensor_to_frame(tensor: torch.Tensor, frame: vs.VideoFrame, stream: torch.cuda.Stream) -> vs.VideoFrame:
-    tensor = tensor.squeeze(0).detach()
-    tensors = [tensor[plane].to("cpu", non_blocking=True) for plane in range(frame.format.num_planes)]
-
+    # Copy all output planes to host in one D2H transfer, then scatter into the
+    # VapourSynth frame planes after the transfer has completed.
+    host_tensor = tensor.squeeze(0).detach().to("cpu", non_blocking=True)
     stream.synchronize()
 
+    host_array = host_tensor.numpy()
     for plane in range(frame.format.num_planes):
-        np.copyto(np.asarray(frame[plane]), tensors[plane].numpy())
+        np.copyto(np.asarray(frame[plane]), host_array[plane])
     return frame
+
