@@ -685,7 +685,10 @@ def drba_rife(
             frame_cache[n] = img
 
         with enc_stream_lock, torch.cuda.stream(enc_stream):
+
             output = encode(img)
+
+            enc_stream.synchronize()
 
             encode_cache[n] = output
 
@@ -776,11 +779,6 @@ def drba_rife(
         with inf_stream_lock, torch.cuda.stream(inf_stream):
             inf_stream.wait_stream(inf_f2t_stream)
             if Head is not None:
-                # Cached encode outputs are produced on enc_stream. Wait for all
-                # previously queued feature extraction before block0 consumes them.
-                with enc_stream_lock:
-                    inf_stream.wait_stream(enc_stream)
-
                 # flo0 -> 0.5 -> 1
                 # flo1 -> 1.5 -> 1
                 flo0 = block0(img1, img0, t05, f1, f0)[:, :2]
