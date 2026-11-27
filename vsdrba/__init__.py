@@ -640,10 +640,10 @@ def drba_rife(
                     encode, encode_engine_path, inputs=encode_inputs
                 )
 
-        flownet = torch.export.load(flownet_engine_path).module().eval()
-        block0 = torch.export.load(block0_engine_path).module().eval()
+        flownet = torch.export.load(flownet_engine_path).module()
+        block0 = torch.export.load(block0_engine_path).module()
         if Head is not None:
-            encode = torch.export.load(encode_engine_path).module().eval()
+            encode = torch.export.load(encode_engine_path).module()
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
