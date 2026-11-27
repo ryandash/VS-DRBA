@@ -36,6 +36,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/routineLife1/VS-DRBA"
 Issues = "https://github.com/routineLife1/VS-DRBA/issues"
+
 [project.optional-dependencies]
 cuda = [
   "torch",
