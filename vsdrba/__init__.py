@@ -483,7 +483,7 @@ def drba_rife(
                     + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
                     + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
                     + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ts"
+                    + ".ep"
             ),
         )
 
@@ -500,7 +500,7 @@ def drba_rife(
                     + (f"_workspace-{trt_workspace_size}" if trt_workspace_size > 0 else "")
                     + (f"_aux-{trt_max_aux_streams}" if trt_max_aux_streams is not None else "")
                     + (f"_level-{trt_optimization_level}" if trt_optimization_level is not None else "")
-                    + ".ts0"
+                    + ".ep0"
             ),
         )
 
@@ -599,7 +599,7 @@ def drba_rife(
                 optimization_level=trt_optimization_level,
             )
 
-            torch_tensorrt.save(flownet, flownet_engine_path, output_format="torchscript", inputs=flownet_inputs)
+            torch_tensorrt.save(flownet, flownet_engine_path, inputs=flownet_inputs)
 
             block0_program = torch.export.export(
                 block0, flownet_inputs, dynamic_shapes=flownet_dynamic_shapes
@@ -617,7 +617,7 @@ def drba_rife(
             )
 
             torch_tensorrt.save(
-                block0, block0_engine_path, output_format="torchscript", inputs=flownet_inputs
+                block0, block0_engine_path, inputs=flownet_inputs
             )
 
             if encode is not None:
@@ -638,13 +638,13 @@ def drba_rife(
                 )
 
                 torch_tensorrt.save(
-                    encode, encode_engine_path, output_format="torchscript", inputs=encode_inputs
+                    encode, encode_engine_path, inputs=encode_inputs
                 )
 
-        flownet = torch.jit.load(flownet_engine_path).eval()
-        block0 = torch.jit.load(block0_engine_path).eval()
+        flownet = torch.export.load(flownet_engine_path).module().eval()
+        block0 = torch.export.load(block0_engine_path).module().eval()
         if Head is not None:
-            encode = torch.jit.load(encode_engine_path).eval()
+            encode = torch.export.load(encode_engine_path).module().eval()
     else:
         flownet, encode, block0 = init_module(model_name, IFNet, scale, ensemble, device, dtype, Head)
 
