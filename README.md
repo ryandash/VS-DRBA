@@ -9,27 +9,28 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 ## Dependencies
 - [PyTorch](https://pytorch.org/get-started/) 2.6.0 or later
 - [VapourSynth](http://www.vapoursynth.com/) R66 or later
-- [vs-miscfilters-obsolete](https://github.com/vapoursynth/vs-miscfilters-obsolete) (only needed for scene change detection)
-- [cupy](https://github.com/cupy/cupy) cupy-cuda11x or later (critical for acceleration)
+- [vs-miscfilters-obsolete](https://github.com/vapoursynth/vs-miscfilters-obsolete) (required only when scene change detection is enabled)
+- [CuPy](https://github.com/cupy/cupy) (installed by the CUDA extra)
 
-`trt` requires additional packages:
-- [TensorRT](https://developer.nvidia.com/tensorrt) 10.7.0.post1 or later
-- [Torch-TensorRT](https://pytorch.org/TensorRT/) 2.6.0 or later
-
-To install the latest stable version of PyTorch, Torch-TensorRT and cupy, run:
-```
-pip install -U packaging setuptools wheel
-pip install -U torch torchvision torch_tensorrt --index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://pypi.nvidia.com
-pip install -U cupy-cuda12x
-```
-
+TensorRT inference uses the standard [NVIDIA TensorRT](https://developer.nvidia.com/tensorrt) and [Torch-TensorRT](https://pytorch.org/TensorRT/) packages. The CUDA extra installs the Python-side CUDA dependencies, including Torch-TensorRT and the CUDA 13.x CuPy package.
 
 ## Installation
+
+Install the latest code and its CUDA dependencies from this repository's `main` branch:
+
+```bash
+python -m pip install "vsdrba[cuda] @ git+https://github.com/ryandash/VS-DRBA.git@main"
 ```
-pip install -U vsdrba==1.0.2
+
+For a CPU-only installation, omit the `[cuda]` extra:
+
+```bash
+python -m pip install "vsdrba @ git+https://github.com/ryandash/VS-DRBA.git@main"
 ```
-If you want to download all models at once, run `python -m vsdrba`. If you prefer to only download the model you
-specified at first run, set `auto_download=True` in `drba_rife()`.
+
+The CUDA extra does not select a specific PyTorch CUDA wheel index. If you need a particular CUDA build, install the matching PyTorch and Torch-TensorRT builds for your CUDA environment separately, then install VS-DRBA without forcing a reinstall of those packages.
+
+If you want to download all models at once, run `python -m vsdrba`. To download only the model specified at first use, set `auto_download=True` in `drba_rife()`.
 
 ## Usage
 ```python
