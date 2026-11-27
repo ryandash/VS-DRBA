@@ -592,13 +592,11 @@ def drba_rife(
                 flownet_program,
                 flownet_inputs,
                 device=device,
-                debug=trt_debug,
                 num_avg_timing_iters=4,
                 workspace_size=trt_workspace_size,
                 min_block_size=1,
                 max_aux_streams=trt_max_aux_streams,
                 optimization_level=trt_optimization_level,
-                use_explicit_typing=True,
             )
 
             torch_tensorrt.save(flownet, flownet_engine_path, output_format="torchscript", inputs=flownet_inputs)
@@ -611,13 +609,11 @@ def drba_rife(
                 block0_program,
                 flownet_inputs,
                 device=device,
-                debug=trt_debug,
                 num_avg_timing_iters=4,
                 workspace_size=trt_workspace_size,
                 min_block_size=1,
                 max_aux_streams=trt_max_aux_streams,
                 optimization_level=trt_optimization_level,
-                use_explicit_typing=True,
             )
 
             torch_tensorrt.save(
@@ -634,7 +630,6 @@ def drba_rife(
                     encode_inputs,
                     device=device,
                     enabled_precisions={dtype},
-                    debug=trt_debug,
                     num_avg_timing_iters=4,
                     workspace_size=trt_workspace_size,
                     min_block_size=1,
