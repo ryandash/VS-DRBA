@@ -12,7 +12,12 @@ Distance Ratio Based Adjuster for Animeinterp, based on https://github.com/routi
 - [vs-miscfilters-obsolete](https://github.com/vapoursynth/vs-miscfilters-obsolete) (required only when scene change detection is enabled)
 - [CuPy](https://github.com/cupy/cupy) (installed by the CUDA extra)
 
-TensorRT inference uses the standard [NVIDIA TensorRT](https://developer.nvidia.com/tensorrt) and [Torch-TensorRT](https://pytorch.org/TensorRT/) packages. The CUDA extra installs the Python-side CUDA dependencies, including Torch-TensorRT and the CUDA 13.x CuPy package.
+`trt=True` requires these additional packages:
+
+- [NVIDIA TensorRT](https://developer.nvidia.com/tensorrt) **11.4.x** (standard TensorRT; not TensorRT-RTX)
+- [Torch-TensorRT](https://pytorch.org/TensorRT/) **2.15.0** or later, matched to your installed PyTorch and CUDA versions
+
+The current Torch-TensorRT 2.15.0 Windows wheels target PyTorch 2.15, CUDA 13.2/13.4, and TensorRT 11.4. Install a mutually compatible PyTorch, CUDA, TensorRT, and Torch-TensorRT combination; these packages are version-coupled, so the newest version of each package is not necessarily a compatible set.
 
 ## Installation
 
