@@ -9,9 +9,6 @@ description = "DRBA_RIFE function for VapourSynth"
 readme = "README.md"
 requires-python = ">=3.10"
 license-files = { paths = ["LICENSE"] }
-authors = [
-  { name = "routineLife1", email = "1315176066@qq.com" },
-]
 keywords = [
   "PyTorch",
   "RIFE",
